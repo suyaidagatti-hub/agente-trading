@@ -33,7 +33,6 @@ FALLBACK_WATCHLIST = [
     "APT-USDT","SEI-USDT","TIA-USDT","JUP-USDT","WLD-USDT"
 ]
 
-# Mapa de símbolo → ID de CoinGecko para sentiment votes
 COINGECKO_IDS = {
     "SOL": "solana", "BNB": "binancecoin", "AVAX": "avalanche-2",
     "DOT": "polkadot", "LINK": "chainlink", "MATIC": "matic-network",
@@ -43,8 +42,8 @@ COINGECKO_IDS = {
     "TAO": "bittensor", "KAS": "kaspa", "HYPE": "hyperliquid",
     "AKT": "akash-network", "PENGU": "pudgy-penguins", "ICP": "internet-computer",
     "XMR": "monero", "QNT": "quant-network", "ALGO": "algorand",
-    "POL": "matic-network", "TRIA": "tria", "NEAR": "near",
-    "FTM": "fantom", "ATOM": "cosmos", "SAND": "the-sandbox",
+    "POL": "matic-network", "NEAR": "near", "FTM": "fantom",
+    "ATOM": "cosmos", "SAND": "the-sandbox", "LYN": "everlyn",
 }
 
 _market_cache = {}
@@ -74,12 +73,11 @@ def sync_portfolio_github(p):
             "Authorization": f"token {GITHUB_TOKEN}",
             "Accept": "application/vnd.github.v3+json",
         }
-        r = requests.get(api_url, headers=headers, timeout=10)
+        r   = requests.get(api_url, headers=headers, timeout=10)
         sha = r.json().get("sha", "") if r.status_code == 200 else ""
 
         contenido     = json.dumps(p, indent=2, ensure_ascii=False)
         contenido_b64 = base64.b64encode(contenido.encode()).decode()
-
         payload = {
             "message": f"Portfolio actualizado — {datetime.utcnow().strftime('%d %b %Y %H:%M UTC')}",
             "content": contenido_b64,
@@ -110,25 +108,18 @@ def base_coin(symbol):
 
 
 # ─────────────────────────────────────────────────────────────
-#  SENTIMIENTO — CoinGecko + Reddit (sin API key)
+#  SENTIMIENTO — CoinGecko + Reddit
 # ─────────────────────────────────────────────────────────────
 
 def get_sentiment(symbol):
-    """
-    Combina dos fuentes gratuitas sin API key:
-    1. CoinGecko sentiment_votes_up_percentage
-    2. Reddit menciones en r/CryptoCurrency últimas 24h
-    Devuelve un score de sentimiento 0-100 y menciones de Reddit.
-    """
-    coin = base_coin(symbol)
+    coin   = base_coin(symbol)
     result = {
-        "sentiment_score":    50,   # neutral por defecto
-        "votes_up_pct":       50,
-        "reddit_mentions":    0,
-        "reddit_sentiment":   "neutral",
+        "sentiment_score":  50,
+        "votes_up_pct":     50,
+        "reddit_mentions":  0,
+        "reddit_sentiment": "neutral",
     }
 
-    # ── CoinGecko sentiment votes ──────────────────────────
     cg_id = COINGECKO_IDS.get(coin, coin.lower())
     try:
         r = requests.get(
@@ -139,19 +130,12 @@ def get_sentiment(symbol):
             timeout=10
         )
         if r.status_code == 200:
-            d = r.json()
-            votes_up = d.get("sentiment_votes_up_percentage") or 50
+            votes_up = r.json().get("sentiment_votes_up_percentage") or 50
             result["votes_up_pct"]    = round(float(votes_up), 1)
             result["sentiment_score"] = round(float(votes_up), 1)
-
-            # Reddit subscribers como señal de comunidad activa
-            community = d.get("community_data", {})
-            reddit_subs = community.get("reddit_subscribers") or 0
-            result["reddit_mentions"] = reddit_subs
     except Exception as e:
         print(f"    CoinGecko sentiment error ({coin}): {e}")
 
-    # ── Reddit menciones recientes ─────────────────────────
     try:
         r = requests.get(
             "https://www.reddit.com/r/CryptoCurrency/search.json",
@@ -161,31 +145,15 @@ def get_sentiment(symbol):
         )
         if r.status_code == 200:
             posts = r.json().get("data", {}).get("children", [])
-            menciones = len(posts)
-            result["reddit_mentions"] = menciones
-
-            # Analizar títulos para detectar sentimiento
-            bullish_words = {"bull", "buy", "moon", "pump", "breakout",
-                             "long", "up", "green", "gain", "rally"}
-            bearish_words = {"bear", "sell", "dump", "crash", "short",
-                             "down", "red", "loss", "drop", "correction"}
-
-            bullish_count = 0
-            bearish_count = 0
-            for post in posts:
-                title = post["data"].get("title", "").lower()
-                if any(w in title for w in bullish_words):
-                    bullish_count += 1
-                if any(w in title for w in bearish_words):
-                    bearish_count += 1
-
+            result["reddit_mentions"] = len(posts)
+            bullish_words = {"bull","buy","moon","pump","breakout","long","up","green","gain","rally"}
+            bearish_words = {"bear","sell","dump","crash","short","down","red","loss","drop","correction"}
+            bullish_count = sum(1 for p in posts if any(w in p["data"].get("title","").lower() for w in bullish_words))
+            bearish_count = sum(1 for p in posts if any(w in p["data"].get("title","").lower() for w in bearish_words))
             if bullish_count > bearish_count:
                 result["reddit_sentiment"] = "bullish"
             elif bearish_count > bullish_count:
                 result["reddit_sentiment"] = "bearish"
-            else:
-                result["reddit_sentiment"] = "neutral"
-
     except Exception as e:
         print(f"    Reddit error ({coin}): {e}")
 
@@ -193,18 +161,55 @@ def get_sentiment(symbol):
 
 
 # ─────────────────────────────────────────────────────────────
+#  INFO DE MONEDA — Claude como analista
+# ─────────────────────────────────────────────────────────────
+
+def get_coin_info(coin: str) -> str:
+    coin = coin.upper()
+
+    precio_info = ""
+    try:
+        tkr = get_ticker(coin + "-USDT")
+        precio_info = (
+            f"Precio actual: ${tkr['price']}\n"
+            f"Cambio 24h: {tkr['change_pct']:+.1f}%\n"
+        )
+    except:
+        precio_info = "Precio: no disponible en KuCoin\n"
+
+    sent = get_sentiment(coin)
+
+    prompt = (
+        f"Analizá brevemente la crypto {coin} para un trader de altcoins.\n\n"
+        f"Datos actuales:\n{precio_info}"
+        f"Sentimiento CoinGecko: {sent['votes_up_pct']}% bullish\n"
+        f"Reddit: {sent['reddit_sentiment']}\n\n"
+        f"Explicá en español y de forma concisa (máximo 300 palabras):\n"
+        f"1. Qué es el proyecto y para qué sirve\n"
+        f"2. Por qué puede subir (tesis alcista)\n"
+        f"3. Riesgos principales\n"
+        f"4. Si es más para trading de corto plazo o holding de largo plazo\n\n"
+        f"Sé directo y útil, sin jerga innecesaria."
+    )
+
+    msg = get_anthropic().messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=500,
+        messages=[{"role": "user", "content": prompt}]
+    )
+    return msg.content[0].text.strip()
+
+
+# ─────────────────────────────────────────────────────────────
 #  TRENDING COINS
 # ─────────────────────────────────────────────────────────────
 
 def get_trending_coins(top_n=15):
-    symbols = []
+    symbols      = []
     coingecko_ok = False
 
     try:
-        r = requests.get(
-            "https://api.coingecko.com/api/v3/search/trending",
-            timeout=10
-        )
+        r = requests.get("https://api.coingecko.com/api/v3/search/trending", timeout=10)
         if r.status_code == 200:
             for item in r.json().get("coins", []):
                 sym = item["item"]["symbol"].upper()
@@ -219,13 +224,8 @@ def get_trending_coins(top_n=15):
         try:
             r = requests.get(
                 "https://api.coingecko.com/api/v3/coins/markets",
-                params={
-                    "vs_currency": "usd",
-                    "order": "price_change_percentage_24h_desc",
-                    "per_page": 20,
-                    "page": 1,
-                    "price_change_percentage": "24h",
-                },
+                params={"vs_currency": "usd", "order": "price_change_percentage_24h_desc",
+                        "per_page": 20, "page": 1, "price_change_percentage": "24h"},
                 timeout=10
             )
             if r.status_code == 200:
@@ -246,11 +246,8 @@ def get_trending_coins(top_n=15):
     for sym in unique[:top_n + 10]:
         pair = sym + "-USDT"
         try:
-            r = requests.get(
-                f"{BASE_KUCOIN}/api/v1/market/stats",
-                params={"symbol": pair},
-                timeout=5
-            )
+            r = requests.get(f"{BASE_KUCOIN}/api/v1/market/stats",
+                             params={"symbol": pair}, timeout=5)
             if r.status_code == 200 and r.json().get("data"):
                 validos.append(pair)
                 if len(validos) >= top_n:
@@ -293,19 +290,15 @@ def get_klines(symbol, interval="4hour", limit=100):
     return candles
 
 def get_ticker(symbol):
-    kc_symbol = to_kucoin(symbol)
-    r = requests.get(
-        f"{BASE_KUCOIN}/api/v1/market/stats",
-        params={"symbol": kc_symbol},
-        timeout=10
-    )
+    kc_symbol   = to_kucoin(symbol)
+    r = requests.get(f"{BASE_KUCOIN}/api/v1/market/stats",
+                     params={"symbol": kc_symbol}, timeout=10)
     r.raise_for_status()
-    d = r.json().get("data", {})
+    d           = r.json().get("data", {})
     last        = float(d.get("last", 0) or 0)
     change_rate = float(d.get("changeRate", 0) or 0)
-    change_pct  = round(change_rate * 100, 2)
     return {
-        "change_pct": change_pct,
+        "change_pct": round(change_rate * 100, 2),
         "volume_24h": float(d.get("volValue", 0) or 0),
         "price":      last,
     }
@@ -318,7 +311,7 @@ def get_price(symbol):
 
 def get_fear_greed():
     try:
-        r = requests.get("https://api.alternative.me/fng/?limit=3", timeout=10)
+        r    = requests.get("https://api.alternative.me/fng/?limit=3", timeout=10)
         data = r.json()["data"]
         return {
             "valor_hoy":     int(data[0]["value"]),
@@ -342,13 +335,11 @@ def get_mercado_global():
     except:
         pass
     try:
-        r = requests.get(
-            f"{BASE_KUCOIN}/api/v1/market/stats",
-            params={"symbol": "BTC-USDT"}, timeout=10
-        )
+        r = requests.get(f"{BASE_KUCOIN}/api/v1/market/stats",
+                         params={"symbol": "BTC-USDT"}, timeout=10)
         d = r.json().get("data", {})
-        change = round(float(d.get("changeRate", 0) or 0) * 100, 2)
-        return {"btc_dominancia": 0, "eth_dominancia": 0, "cambio_mcap_24h": change}
+        return {"btc_dominancia": 0, "eth_dominancia": 0,
+                "cambio_mcap_24h": round(float(d.get("changeRate", 0) or 0) * 100, 2)}
     except:
         return {"btc_dominancia": 0, "cambio_mcap_24h": 0}
 
@@ -373,12 +364,11 @@ def calc_indicators(klines):
         al = np.convolve(l, np.ones(n) / n, "valid")
         return float(100 - 100 / (1 + ag[-1] / (al[-1] + 1e-10)))
 
-    atr = float(np.mean(np.maximum.reduce([
+    atr    = float(np.mean(np.maximum.reduce([
         highs[-14:] - lows[-14:],
         np.abs(highs[-14:] - closes[-15:-1]),
         np.abs(lows[-14:]  - closes[-15:-1]),
     ])))
-
     bb_mid = closes[-20:].mean()
     bb_std = closes[-20:].std()
 
@@ -425,9 +415,9 @@ def recolectar_datos(portfolio):
 
 def escanear_candidatos(excluir=[]):
     print("  Escaneando candidatos...")
-    trending = get_trending_coins(top_n=15)
-
+    trending   = get_trending_coins(top_n=15)
     candidatos = []
+
     for symbol in trending:
         coin = base_coin(symbol)
         if coin in excluir:
@@ -442,15 +432,14 @@ def escanear_candidatos(excluir=[]):
             s   = data["sentiment"]
             tkr = data["ticker_24h"]
 
-            # Scoring máximo 12 puntos
             score = 0
-            if 35 < t["rsi_14"] < 65:           score += 3  # RSI zona ideal
-            if t["ema_20"] > t["ema_50"]:        score += 2  # tendencia alcista
-            if t["volume_ratio"] > 1.2:          score += 2  # volumen creciente
-            if s["votes_up_pct"] > 60:           score += 2  # mayoría bullish en CoinGecko
-            if s["reddit_sentiment"] == "bullish": score += 1 # Reddit positivo
-            if tkr["change_pct"] > 2:            score += 1  # subiendo hoy
-            if t["price"] > t["vwap"]:           score += 1  # sobre VWAP
+            if 35 < t["rsi_14"] < 65:              score += 3
+            if t["ema_20"] > t["ema_50"]:           score += 2
+            if t["volume_ratio"] > 1.2:             score += 2
+            if s["votes_up_pct"] > 60:              score += 2
+            if s["reddit_sentiment"] == "bullish":  score += 1
+            if tkr["change_pct"] > 2:               score += 1
+            if t["price"] > t["vwap"]:              score += 1
 
             candidatos.append({
                 "symbol":           symbol,
@@ -464,9 +453,7 @@ def escanear_candidatos(excluir=[]):
                 "ema_trend":        "alcista" if t["ema_20"] > t["ema_50"] else "bajista",
             })
             print(f"    OK {symbol}: score={score}, RSI={t['rsi_14']}, "
-                  f"24h={tkr['change_pct']:+.1f}%, "
-                  f"sentiment={s['votes_up_pct']}% up, "
-                  f"reddit={s['reddit_sentiment']}")
+                  f"24h={tkr['change_pct']:+.1f}%, sentiment={s['votes_up_pct']}% up")
         except Exception as e:
             print(f"    Skip {symbol}: {e}")
 
@@ -477,35 +464,32 @@ def escanear_candidatos(excluir=[]):
 
 
 # ─────────────────────────────────────────────────────────────
-#  CEREBRO IA
+#  CEREBRO IA — perfil agresivo-moderado, SL/TP originales
 # ─────────────────────────────────────────────────────────────
 
-SYSTEM = """Sos un gestor de portfolio de crypto conservador-agresivo.
-Gestionás 2 líneas de inversión independientes. Objetivo: 50-100% mensual.
+SYSTEM = """Sos un gestor de portfolio de crypto con perfil AGRESIVO-MODERADO.
+Gestionás 2 líneas de inversión independientes. Objetivo: +30% mensual mínimo.
 Solo operás altcoins trending — NUNCA sugerís BTC ni ETH como destino.
 
-Recibís por cada línea:
-- Posición actual, precio de entrada, P&L%
-- Indicadores técnicos: EMA20/50, RSI14, Bollinger, VWAP, volumen relativo
-- Sentimiento: votes_up_pct (% usuarios bullish en CoinGecko) y reddit_sentiment
-- Contexto global: Fear & Greed, dominancia BTC, cambio mcap 24h
-- Candidatos trending pre-rankeados con score 0-12
+FILOSOFÍA: buscás movimientos fuertes con momentum real. Aceptás más riesgo
+en las entradas pero protegés el capital con stop loss disciplinado.
 
 CUÁNDO VENDER:
-- RSI > 78 con volumen cayendo
-- P&L supera +25% → tomar ganancias
-- Precio toca BB superior + sentiment cayendo
-- Fear & Greed > 80
+- RSI > 82 con volumen cayendo → tomar ganancias
+- P&L supera +25% → considerar toma parcial
 - Stop loss: pérdida > 8%
-- BTC cae > 5% en 24h → mover a USDT
+- BTC cae > 7% en 24h → mover a USDT
+- Fear & Greed > 85 → reducir exposición
 
-CUÁNDO COMPRAR:
-- Elegir del top de candidatos_trending (score más alto)
-- RSI entre 38-62 + EMA 20 sobre EMA 50
-- Volume ratio > 1.2 + Fear & Greed entre 20-68
-- votes_up_pct > 55 preferiblemente
+CUÁNDO COMPRAR — perfil agresivo:
+- RSI entre 30-68 (rango amplio, acepta sobreventa)
+- EMA 20 sobre EMA 50 preferiblemente, pero no obligatorio si el momentum es fuerte
+- Volume ratio > 0.8 (umbral bajo, acepta volumen moderado)
+- Fear & Greed entre 15-72 (entra con más miedo que un perfil conservador)
+- Score mínimo para entrar: 3/12
+- Si hay momentum fuerte (24h > 10%) puede entrar aunque otros indicadores sean mixtos
+- En pánico extremo (Fear < 15) + RSI bajo + sentimiento bullish = oportunidad de entrada
 - Nunca las 2 líneas en la misma moneda
-- Si no hay candidatos con score > 4, recomendar ESPERAR en USDT
 
 NIVELES:
 - Stop loss: -8% del precio de entrada
@@ -539,7 +523,7 @@ Respondé SOLO JSON sin texto extra:
 }"""
 
 def analizar_portfolio(portfolio, market_data, candidatos=None):
-    lineas = portfolio["lineas"]
+    lineas     = portfolio["lineas"]
     fear_greed = get_fear_greed()
     mercado    = get_mercado_global()
 
@@ -560,10 +544,7 @@ def analizar_portfolio(portfolio, market_data, candidatos=None):
         return round((precio_actual - entrada) / entrada * 100, 2)
 
     payload = {
-        "contexto_global": {
-            "fear_greed":     fear_greed,
-            "mercado_global": mercado,
-        },
+        "contexto_global": {"fear_greed": fear_greed, "mercado_global": mercado},
         "candidatos_trending": candidatos,
         "linea_1": {
             "moneda_actual":  lineas["linea_1"]["moneda_actual"],
@@ -588,7 +569,7 @@ def analizar_portfolio(portfolio, market_data, candidatos=None):
         messages=[{"role": "user", "content": json.dumps(payload)}]
     )
 
-    texto = msg.content[0].text.strip()
+    texto  = msg.content[0].text.strip()
     inicio = texto.find("{")
     fin    = texto.rfind("}") + 1
     if inicio == -1 or fin == 0:
@@ -601,8 +582,8 @@ def analizar_portfolio(portfolio, market_data, candidatos=None):
 # ─────────────────────────────────────────────────────────────
 
 def formato_estado(portfolio, analisis, candidatos=None):
-    lineas = portfolio["lineas"]
-    ts = datetime.utcnow().strftime("%d %b · %H:%M UTC")
+    lineas       = portfolio["lineas"]
+    ts           = datetime.utcnow().strftime("%d %b · %H:%M UTC")
     mercado_icon = {"ALCISTA": "↑", "NEUTRAL": "→", "BAJISTA": "↓"}.get(
         analisis.get("estado_mercado", ""), "?")
 
@@ -621,7 +602,7 @@ def formato_estado(portfolio, analisis, candidatos=None):
         )
         if l["moneda_actual"] != "USDT" and l["precio_entrada"] > 0:
             precio_actual = _market_cache.get(key, {}).get("technical", {}).get("price", l["precio_entrada"])
-            pl = round((precio_actual - l["precio_entrada"]) / l["precio_entrada"] * 100, 2)
+            pl    = round((precio_actual - l["precio_entrada"]) / l["precio_entrada"] * 100, 2)
             signo = "+" if pl >= 0 else ""
             texto += f"Entrada: ${l['precio_entrada']}  |  P&L: {signo}{pl:.1f}%\n"
 
@@ -670,16 +651,33 @@ def main():
     async def cmd_ayuda(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             "COMANDOS\n\n"
-            "/estado          — analisis completo + trending\n"
-            "/portfolio       — ver posiciones actuales\n"
-            "/trending        — top monedas del momento\n"
+            "/estado             — analisis completo + trending\n"
+            "/portfolio          — ver posiciones actuales\n"
+            "/trending           — top monedas del momento\n"
+            "/info SOL           — analisis detallado de una moneda\n"
             "/comprar 1 SOL 134.50\n"
             "/vender 1 168.00\n"
-            "/capital 1 8.33  — actualizar capital\n"
-            "/ayuda           — esta ayuda\n\n"
-            "Alertas automaticas cada 6h via GitHub Actions.\n"
-            "Cambios en portfolio se sincronizan a GitHub automaticamente."
+            "/capital 1 8.33     — actualizar capital\n"
+            "/ayuda              — esta ayuda\n\n"
+            "Perfil: agresivo-moderado\n"
+            "SL: -8%  |  TP1: +25%  |  TP2: +40%\n"
+            "Monitor de posiciones: cada 30 min\n"
+            "Scan de mercado: cada 6 horas"
         )
+
+    async def cmd_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not context.args:
+            await update.message.reply_text(
+                "Uso: /info <moneda>\n\nEjemplos:\n  /info TAO\n  /info SOL\n  /info LYN"
+            )
+            return
+        coin = context.args[0].upper()
+        await update.message.reply_text(f"Analizando {coin}, un momento...")
+        try:
+            info = get_coin_info(coin)
+            await update.message.reply_text(f"ANALISIS — {coin}\n\n{info}")
+        except Exception as e:
+            await update.message.reply_text(f"Error al analizar {coin}: {e}")
 
     async def cmd_estado(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Analizando, un momento...")
@@ -740,9 +738,7 @@ def main():
         if len(args) != 3:
             await update.message.reply_text(
                 "Uso: /comprar <linea> <moneda> <precio>\n\n"
-                "Ejemplos:\n"
-                "  /comprar 1 SOL 134.50\n"
-                "  /comprar 2 TAO 380.00"
+                "Ejemplos:\n  /comprar 1 SOL 134.50\n  /comprar 2 TAO 380.00"
             )
             return
 
@@ -763,8 +759,7 @@ def main():
         if moneda in STABLECOINS:
             await update.message.reply_text(
                 f"{moneda} es una stablecoin, no se puede registrar como compra.\n\n"
-                f"Para actualizar el capital usa:\n"
-                f"/capital {linea_num} <monto_usd>"
+                f"Para actualizar el capital usa:\n/capital {linea_num} <monto_usd>"
             )
             return
 
@@ -777,37 +772,32 @@ def main():
             return
 
         symbol = to_kucoin(moneda)
-        p = load_portfolio()
-        l = p["lineas"][linea_key]
+        p      = load_portfolio()
+        l      = p["lineas"][linea_key]
 
         if l["moneda_actual"] != "USDT" and l["precio_entrada"] > 0:
             precio_actual = get_price(l["moneda_actual"])
             pl = round((precio_actual - l["precio_entrada"]) / l["precio_entrada"] * 100, 2) if precio_actual > 0 else 0
             l["historial"].append({
-                "accion":         "venta_previa_a_compra",
-                "moneda":         l["moneda_actual"],
-                "precio_entrada": l["precio_entrada"],
-                "precio_salida":  precio_actual,
-                "pl_pct":         pl,
-                "fecha":          datetime.utcnow().isoformat(),
+                "accion": "venta_previa_a_compra", "moneda": l["moneda_actual"],
+                "precio_entrada": l["precio_entrada"], "precio_salida": precio_actual,
+                "pl_pct": pl, "fecha": datetime.utcnow().isoformat(),
             })
 
         l["moneda_actual"]  = symbol
         l["precio_entrada"] = precio
         l["fecha_entrada"]  = datetime.utcnow().strftime("%Y-%m-%d")
         l["historial"].append({
-            "accion":         "compra",
-            "moneda":         symbol,
-            "precio_entrada": precio,
-            "capital_usd":    l["capital_usd"],
-            "fecha":          datetime.utcnow().isoformat(),
+            "accion": "compra", "moneda": symbol,
+            "precio_entrada": precio, "capital_usd": l["capital_usd"],
+            "fecha": datetime.utcnow().isoformat(),
         })
 
         save_portfolio(p)
 
-        sl  = round(precio * 0.92, 4)
-        tp1 = round(precio * 1.25, 4)
-        tp2 = round(precio * 1.40, 4)
+        sl  = round(precio * 0.92, 4)   # -8%
+        tp1 = round(precio * 1.25, 4)   # +25%
+        tp2 = round(precio * 1.40, 4)   # +40%
 
         await update.message.reply_text(
             f"COMPRA REGISTRADA\n\n"
@@ -825,9 +815,7 @@ def main():
         if len(args) != 2:
             await update.message.reply_text(
                 "Uso: /vender <linea> <precio>\n\n"
-                "Ejemplos:\n"
-                "  /vender 1 168.00\n"
-                "  /vender 2 420.50"
+                "Ejemplos:\n  /vender 1 168.00\n  /vender 2 420.50"
             )
             return
 
@@ -843,8 +831,8 @@ def main():
             return
 
         linea_key = f"linea_{linea_num}"
-        p = load_portfolio()
-        l = p["lineas"][linea_key]
+        p         = load_portfolio()
+        l         = p["lineas"][linea_key]
 
         if l["moneda_actual"] == "USDT":
             await update.message.reply_text(f"La linea {linea_num} ya esta en USDT.")
@@ -854,19 +842,15 @@ def main():
         moneda         = l["moneda_actual"]
         capital        = l["capital_usd"]
 
-        pl_pct = round((precio_venta - precio_entrada) / precio_entrada * 100, 2) if precio_entrada > 0 else 0
+        pl_pct        = round((precio_venta - precio_entrada) / precio_entrada * 100, 2) if precio_entrada > 0 else 0
         nuevo_capital = round(capital * (1 + pl_pct / 100), 2)
-        signo = "+" if pl_pct >= 0 else ""
+        signo         = "+" if pl_pct >= 0 else ""
 
         l["historial"].append({
-            "accion":          "venta",
-            "moneda":          moneda,
-            "precio_entrada":  precio_entrada,
-            "precio_salida":   precio_venta,
-            "pl_pct":          pl_pct,
-            "capital_antes":   capital,
-            "capital_despues": nuevo_capital,
-            "fecha":           datetime.utcnow().isoformat(),
+            "accion": "venta", "moneda": moneda,
+            "precio_entrada": precio_entrada, "precio_salida": precio_venta,
+            "pl_pct": pl_pct, "capital_antes": capital,
+            "capital_despues": nuevo_capital, "fecha": datetime.utcnow().isoformat(),
         })
 
         l["moneda_actual"]  = "USDT"
@@ -892,10 +876,7 @@ def main():
         args = context.args
         if len(args) != 2:
             await update.message.reply_text(
-                "Uso: /capital <linea> <monto_usd>\n\n"
-                "Ejemplos:\n"
-                "  /capital 1 8.33\n"
-                "  /capital 2 8.33"
+                "Uso: /capital <linea> <monto_usd>\n\nEjemplos:\n  /capital 1 8.33\n  /capital 2 8.33"
             )
             return
 
@@ -911,13 +892,12 @@ def main():
             return
 
         linea_key = f"linea_{linea_num}"
-        p = load_portfolio()
+        p         = load_portfolio()
         p["lineas"][linea_key]["capital_usd"] = monto
         save_portfolio(p)
 
         await update.message.reply_text(
-            f"Capital actualizado\n\n"
-            f"Linea {linea_num}: ${monto:.2f} USD\n"
+            f"Capital actualizado\n\nLinea {linea_num}: ${monto:.2f} USD\n"
             f"Portfolio sincronizado con GitHub."
         )
 
@@ -925,12 +905,13 @@ def main():
     app.add_handler(CommandHandler("estado",    cmd_estado))
     app.add_handler(CommandHandler("portfolio", cmd_portfolio))
     app.add_handler(CommandHandler("trending",  cmd_trending))
+    app.add_handler(CommandHandler("info",      cmd_info))
     app.add_handler(CommandHandler("comprar",   cmd_comprar))
     app.add_handler(CommandHandler("vender",    cmd_vender))
     app.add_handler(CommandHandler("capital",   cmd_capital))
     app.add_handler(CommandHandler("ayuda",     cmd_ayuda))
     app.add_handler(CommandHandler("help",      cmd_ayuda))
-    print("Bot corriendo. Comandos: /estado /portfolio /trending /comprar /vender /capital /ayuda")
+    print("Bot corriendo. Comandos: /estado /portfolio /trending /info /comprar /vender /capital /ayuda")
     app.run_polling()
 
 if __name__ == "__main__":
