@@ -2,8 +2,11 @@ name: Trading Agent Scanner
 
 on:
   schedule:
-    - cron: '0 */6 * * *'   # cada 6 horas: 0, 6, 12, 18 UTC
-  workflow_dispatch:          # permite dispararlo manualmente desde GitHub
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   scan:
@@ -19,12 +22,28 @@ jobs:
           python-version: '3.11'
 
       - name: Instalar dependencias
-        run: pip install requests anthropic numpy python-dotenv python-telegram-bot==21.5
+        run: pip install requests anthropic numpy python-dotenv "python-telegram-bot==21.5"
+
+      - name: Verificar variables de entorno
+        run: |
+          python -c "
+          import os
+          keys = ['ANTHROPIC_API_KEY','TELEGRAM_BOT_TOKEN','TELEGRAM_CHAT_ID','LUNARCRUSH_API_KEY']
+          for k in keys:
+              val = os.environ.get(k, '')
+              status = 'OK' if val else 'FALTA'
+              print(f'{k}: {status} (len={len(val)})')
+          "
+        env:
+          ANTHROPIC_API_KEY:   ${{ secrets.ANTHROPIC_API_KEY }}
+          TELEGRAM_BOT_TOKEN:  ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:    ${{ secrets.TELEGRAM_CHAT_ID }}
+          LUNARCRUSH_API_KEY:  ${{ secrets.LUNARCRUSH_API_KEY }}
 
       - name: Correr scanner
         run: python scanner.py
         env:
-          ANTHROPIC_API_KEY:    ${{ secrets.ANTHROPIC_API_KEY }}
-          TELEGRAM_BOT_TOKEN:   ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID:     ${{ secrets.TELEGRAM_CHAT_ID }}
-          LUNARCRUSH_API_KEY:   ${{ secrets.LUNARCRUSH_API_KEY }}
+          ANTHROPIC_API_KEY:   ${{ secrets.ANTHROPIC_API_KEY }}
+          TELEGRAM_BOT_TOKEN:  ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:    ${{ secrets.TELEGRAM_CHAT_ID }}
+          LUNARCRUSH_API_KEY:  ${{ secrets.LUNARCRUSH_API_KEY }}
