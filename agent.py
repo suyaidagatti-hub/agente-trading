@@ -33,6 +33,20 @@ FALLBACK_WATCHLIST = [
     "APT-USDT","SEI-USDT","TIA-USDT","JUP-USDT","WLD-USDT"
 ]
 
+# Mapa de símbolo → ID de CoinGecko para sentiment votes
+COINGECKO_IDS = {
+    "SOL": "solana", "BNB": "binancecoin", "AVAX": "avalanche-2",
+    "DOT": "polkadot", "LINK": "chainlink", "MATIC": "matic-network",
+    "ARB": "arbitrum", "OP": "optimism", "INJ": "injective-protocol",
+    "SUI": "sui", "APT": "aptos", "SEI": "sei-network",
+    "TIA": "celestia", "JUP": "jupiter-exchange-solana", "WLD": "worldcoin-wld",
+    "TAO": "bittensor", "KAS": "kaspa", "HYPE": "hyperliquid",
+    "AKT": "akash-network", "PENGU": "pudgy-penguins", "ICP": "internet-computer",
+    "XMR": "monero", "QNT": "quant-network", "ALGO": "algorand",
+    "POL": "matic-network", "TRIA": "tria", "NEAR": "near",
+    "FTM": "fantom", "ATOM": "cosmos", "SAND": "the-sandbox",
+}
+
 _market_cache = {}
 
 
@@ -93,6 +107,89 @@ def to_kucoin(symbol):
 
 def base_coin(symbol):
     return symbol.replace("-USDT", "").replace("USDT", "").upper()
+
+
+# ─────────────────────────────────────────────────────────────
+#  SENTIMIENTO — CoinGecko + Reddit (sin API key)
+# ─────────────────────────────────────────────────────────────
+
+def get_sentiment(symbol):
+    """
+    Combina dos fuentes gratuitas sin API key:
+    1. CoinGecko sentiment_votes_up_percentage
+    2. Reddit menciones en r/CryptoCurrency últimas 24h
+    Devuelve un score de sentimiento 0-100 y menciones de Reddit.
+    """
+    coin = base_coin(symbol)
+    result = {
+        "sentiment_score":    50,   # neutral por defecto
+        "votes_up_pct":       50,
+        "reddit_mentions":    0,
+        "reddit_sentiment":   "neutral",
+    }
+
+    # ── CoinGecko sentiment votes ──────────────────────────
+    cg_id = COINGECKO_IDS.get(coin, coin.lower())
+    try:
+        r = requests.get(
+            f"https://api.coingecko.com/api/v3/coins/{cg_id}",
+            params={"localization": "false", "tickers": "false",
+                    "market_data": "false", "community_data": "true",
+                    "developer_data": "false"},
+            timeout=10
+        )
+        if r.status_code == 200:
+            d = r.json()
+            votes_up = d.get("sentiment_votes_up_percentage") or 50
+            result["votes_up_pct"]    = round(float(votes_up), 1)
+            result["sentiment_score"] = round(float(votes_up), 1)
+
+            # Reddit subscribers como señal de comunidad activa
+            community = d.get("community_data", {})
+            reddit_subs = community.get("reddit_subscribers") or 0
+            result["reddit_mentions"] = reddit_subs
+    except Exception as e:
+        print(f"    CoinGecko sentiment error ({coin}): {e}")
+
+    # ── Reddit menciones recientes ─────────────────────────
+    try:
+        r = requests.get(
+            "https://www.reddit.com/r/CryptoCurrency/search.json",
+            params={"q": coin, "sort": "new", "t": "day", "limit": 25},
+            headers={"User-Agent": "TradingAgentBot/1.0"},
+            timeout=10
+        )
+        if r.status_code == 200:
+            posts = r.json().get("data", {}).get("children", [])
+            menciones = len(posts)
+            result["reddit_mentions"] = menciones
+
+            # Analizar títulos para detectar sentimiento
+            bullish_words = {"bull", "buy", "moon", "pump", "breakout",
+                             "long", "up", "green", "gain", "rally"}
+            bearish_words = {"bear", "sell", "dump", "crash", "short",
+                             "down", "red", "loss", "drop", "correction"}
+
+            bullish_count = 0
+            bearish_count = 0
+            for post in posts:
+                title = post["data"].get("title", "").lower()
+                if any(w in title for w in bullish_words):
+                    bullish_count += 1
+                if any(w in title for w in bearish_words):
+                    bearish_count += 1
+
+            if bullish_count > bearish_count:
+                result["reddit_sentiment"] = "bullish"
+            elif bearish_count > bullish_count:
+                result["reddit_sentiment"] = "bearish"
+            else:
+                result["reddit_sentiment"] = "neutral"
+
+    except Exception as e:
+        print(f"    Reddit error ({coin}): {e}")
+
+    return result
 
 
 # ─────────────────────────────────────────────────────────────
@@ -196,11 +293,6 @@ def get_klines(symbol, interval="4hour", limit=100):
     return candles
 
 def get_ticker(symbol):
-    """
-    FIX: KuCoin /market/stats devuelve 'changeRate' como variación 24h real
-    (ej: 0.05 = +5%). El campo 'open' es el precio de apertura del día UTC,
-    no hace 24 horas exactas, por eso daba 0.0% cerca de medianoche.
-    """
     kc_symbol = to_kucoin(symbol)
     r = requests.get(
         f"{BASE_KUCOIN}/api/v1/market/stats",
@@ -223,54 +315,6 @@ def get_price(symbol):
         return get_ticker(to_kucoin(symbol))["price"]
     except:
         return 0
-
-def get_lunarcrush(symbol):
-    """
-    FIX: LunarCrush v4 cambió el endpoint. Ahora usamos /coins/list/v1
-    con filtro por símbolo para obtener el galaxy_score correctamente.
-    Si falla, intentamos el endpoint alternativo /coins/{symbol}/v1.
-    """
-    try:
-        coin = base_coin(symbol).lower()
-        key  = os.environ.get("LUNARCRUSH_API_KEY", "")
-        if not key:
-            return {"galaxy_score": 0, "sentiment": 0, "social_volume": 0}
-
-        # Intento 1: endpoint de lista con filtro (más estable)
-        r = requests.get(
-            "https://lunarcrush.com/api4/public/coins/list/v1",
-            params={"filter": coin},
-            headers={"Authorization": f"Bearer {key}"},
-            timeout=10
-        )
-        if r.status_code == 200:
-            data = r.json().get("data", [])
-            for item in data:
-                if item.get("symbol", "").lower() == coin:
-                    return {
-                        "galaxy_score":  item.get("galaxy_score", 0) or 0,
-                        "sentiment":     item.get("sentiment", 0) or 0,
-                        "social_volume": item.get("social_volume", 0) or 0,
-                    }
-
-        # Intento 2: endpoint individual (fallback)
-        r = requests.get(
-            f"https://lunarcrush.com/api4/public/coins/{coin}/v1",
-            headers={"Authorization": f"Bearer {key}"},
-            timeout=10
-        )
-        if r.status_code == 200:
-            d = r.json().get("data", {})
-            return {
-                "galaxy_score":  d.get("galaxy_score", 0) or 0,
-                "sentiment":     d.get("sentiment", 0) or 0,
-                "social_volume": d.get("social_volume", 0) or 0,
-            }
-
-    except Exception as e:
-        print(f"    LunarCrush error ({symbol}): {e}")
-
-    return {"galaxy_score": 0, "sentiment": 0, "social_volume": 0}
 
 def get_fear_greed():
     try:
@@ -357,7 +401,7 @@ def full_market_data(symbol):
             "symbol":     symbol,
             "technical":  calc_indicators(klines),
             "ticker_24h": get_ticker(symbol),
-            "lunarcrush": get_lunarcrush(symbol),
+            "sentiment":  get_sentiment(symbol),
         }
     except Exception as e:
         return {"symbol": symbol, "error": str(e)}
@@ -395,30 +439,34 @@ def escanear_candidatos(excluir=[]):
                 print(f"    Error {symbol}: {data['error']}")
                 continue
             t   = data["technical"]
-            lc  = data["lunarcrush"]
+            s   = data["sentiment"]
             tkr = data["ticker_24h"]
 
+            # Scoring máximo 12 puntos
             score = 0
-            if 35 < t["rsi_14"] < 65:        score += 3
-            if t["ema_20"] > t["ema_50"]:     score += 2
-            if t["volume_ratio"] > 1.2:       score += 2
-            if lc["galaxy_score"] > 50:       score += 2
-            if lc["sentiment"] > 3:           score += 1
-            if tkr["change_pct"] > 2:         score += 1
-            if t["price"] > t["vwap"]:        score += 1
+            if 35 < t["rsi_14"] < 65:           score += 3  # RSI zona ideal
+            if t["ema_20"] > t["ema_50"]:        score += 2  # tendencia alcista
+            if t["volume_ratio"] > 1.2:          score += 2  # volumen creciente
+            if s["votes_up_pct"] > 60:           score += 2  # mayoría bullish en CoinGecko
+            if s["reddit_sentiment"] == "bullish": score += 1 # Reddit positivo
+            if tkr["change_pct"] > 2:            score += 1  # subiendo hoy
+            if t["price"] > t["vwap"]:           score += 1  # sobre VWAP
 
             candidatos.append({
-                "symbol":       symbol,
-                "score":        score,
-                "price":        t["price"],
-                "rsi":          t["rsi_14"],
-                "change_pct":   round(tkr["change_pct"], 2),
-                "galaxy_score": lc["galaxy_score"],
-                "volume_ratio": t["volume_ratio"],
-                "ema_trend":    "alcista" if t["ema_20"] > t["ema_50"] else "bajista",
+                "symbol":           symbol,
+                "score":            score,
+                "price":            t["price"],
+                "rsi":              t["rsi_14"],
+                "change_pct":       round(tkr["change_pct"], 2),
+                "votes_up_pct":     s["votes_up_pct"],
+                "reddit_sentiment": s["reddit_sentiment"],
+                "volume_ratio":     t["volume_ratio"],
+                "ema_trend":        "alcista" if t["ema_20"] > t["ema_50"] else "bajista",
             })
             print(f"    OK {symbol}: score={score}, RSI={t['rsi_14']}, "
-                  f"24h={tkr['change_pct']:+.1f}%, galaxy={lc['galaxy_score']}")
+                  f"24h={tkr['change_pct']:+.1f}%, "
+                  f"sentiment={s['votes_up_pct']}% up, "
+                  f"reddit={s['reddit_sentiment']}")
         except Exception as e:
             print(f"    Skip {symbol}: {e}")
 
@@ -438,15 +486,15 @@ Solo operás altcoins trending — NUNCA sugerís BTC ni ETH como destino.
 
 Recibís por cada línea:
 - Posición actual, precio de entrada, P&L%
-- Indicadores: EMA20/50, RSI14, Bollinger, VWAP, volumen relativo
-- Sentimiento: LunarCrush Galaxy Score
+- Indicadores técnicos: EMA20/50, RSI14, Bollinger, VWAP, volumen relativo
+- Sentimiento: votes_up_pct (% usuarios bullish en CoinGecko) y reddit_sentiment
 - Contexto global: Fear & Greed, dominancia BTC, cambio mcap 24h
 - Candidatos trending pre-rankeados con score 0-12
 
 CUÁNDO VENDER:
 - RSI > 78 con volumen cayendo
 - P&L supera +25% → tomar ganancias
-- Precio toca BB superior + Galaxy Score cayendo
+- Precio toca BB superior + sentiment cayendo
 - Fear & Greed > 80
 - Stop loss: pérdida > 8%
 - BTC cae > 5% en 24h → mover a USDT
@@ -455,6 +503,7 @@ CUÁNDO COMPRAR:
 - Elegir del top de candidatos_trending (score más alto)
 - RSI entre 38-62 + EMA 20 sobre EMA 50
 - Volume ratio > 1.2 + Fear & Greed entre 20-68
+- votes_up_pct > 55 preferiblemente
 - Nunca las 2 líneas en la misma moneda
 - Si no hay candidatos con score > 4, recomendar ESPERAR en USDT
 
@@ -598,7 +647,8 @@ def formato_estado(portfolio, analisis, candidatos=None):
             s = "+" if c["change_pct"] >= 0 else ""
             resultado += (
                 f"{base_coin(c['symbol'])}: "
-                f"RSI {c['rsi']} | Score {c['score']}/12 | {s}{c['change_pct']:.1f}% 24h\n"
+                f"RSI {c['rsi']} | Score {c['score']}/12 | {s}{c['change_pct']:.1f}% 24h"
+                f" | Sent: {c['votes_up_pct']}% up\n"
             )
 
     return resultado
@@ -678,7 +728,8 @@ def main():
                     f"{i}. {base_coin(c['symbol'])}\n"
                     f"   Score: {c['score']}/12  RSI: {c['rsi']}\n"
                     f"   24h: {s}{c['change_pct']:.1f}%  Vol: x{c['volume_ratio']}\n"
-                    f"   Galaxy: {c['galaxy_score']}  Tend: {c['ema_trend']}\n\n"
+                    f"   Sentiment: {c['votes_up_pct']}% up  Reddit: {c['reddit_sentiment']}\n"
+                    f"   Tend: {c['ema_trend']}\n\n"
                 )
             await update.message.reply_text(msg)
         except Exception as e:
