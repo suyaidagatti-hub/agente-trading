@@ -2,22 +2,36 @@ import os, json, requests
 from datetime import datetime
 from dotenv import load_dotenv
 import numpy as np
-from anthropic import Anthropic
-from telegram import Bot, Update
-from telegram.ext import Application, CommandHandler, ContextTypes
 
 load_dotenv()
 
-ANTHROPIC    = Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
-BOT_TOKEN    = os.environ["TELEGRAM_BOT_TOKEN"]
-CHAT_ID      = os.environ["TELEGRAM_CHAT_ID"]
+# Cliente Anthropic inicializado de forma lazy para evitar error en import
+_anthropic_client = None
+
+def get_anthropic():
+    global _anthropic_client
+    if _anthropic_client is None:
+        from anthropic import Anthropic
+        key = os.environ.get("ANTHROPIC_API_KEY", "")
+        if not key:
+            raise ValueError("ANTHROPIC_API_KEY no encontrada en las variables de entorno")
+        _anthropic_client = Anthropic(api_key=key)
+    return _anthropic_client
+
+BOT_TOKEN    = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+CHAT_ID      = os.environ.get("TELEGRAM_CHAT_ID", "")
 PORTFOLIO_F  = "portfolio.json"
 BASE_BINANCE = "https://api.binance.com"
 
-# Monedas que nunca sugerimos
-BLACKLIST = {"USDT", "USDC", "BUSD", "DAI", "TUSD", "USDP", "BTC", "ETH", "WBTC", "STETH"}
+BLACKLIST = {"USDT","USDC","BUSD","DAI","TUSD","USDP","BTC","ETH","WBTC","STETH"}
 
-# Cache global para usar P&L real en los mensajes
+# Watchlist de respaldo si CoinGecko falla (actualizada manualmente)
+FALLBACK_WATCHLIST = [
+    "SOLUSDT","BNBUSDT","AVAXUSDT","DOTUSDT","LINKUSDT",
+    "MATICUSDT","ARBUSDT","OPUSDT","INJUSDT","SUIUSDT",
+    "APTUSDT","SEIUSDT","TIAUSDT","JUPUSDT","WLDUSDT"
+]
+
 _market_cache = {}
 
 
@@ -36,45 +50,55 @@ def save_portfolio(p):
 
 
 # ─────────────────────────────────────────────────────────────
-#  TRENDING COINS
+#  TRENDING COINS con fallback
 # ─────────────────────────────────────────────────────────────
 
 def get_trending_coins(top_n=15):
-    """Combina trending por búsquedas + top gainers 24h de CoinGecko."""
     symbols = []
+    coingecko_ok = False
 
-    # Fuente 1: trending por búsquedas
+    # Intentar CoinGecko trending
     try:
         r = requests.get(
             "https://api.coingecko.com/api/v3/search/trending",
             timeout=10
         )
-        for item in r.json().get("coins", []):
-            sym = item["item"]["symbol"].upper()
-            if sym not in BLACKLIST:
-                symbols.append(sym)
+        if r.status_code == 200:
+            for item in r.json().get("coins", []):
+                sym = item["item"]["symbol"].upper()
+                if sym not in BLACKLIST:
+                    symbols.append(sym)
+            coingecko_ok = True
+            print(f"  CoinGecko trending: {symbols[:8]}")
     except Exception as e:
-        print(f"  Trending error: {e}")
+        print(f"  CoinGecko trending no disponible: {e}")
 
-    # Fuente 2: top gainers 24h
-    try:
-        r = requests.get(
-            "https://api.coingecko.com/api/v3/coins/markets",
-            params={
-                "vs_currency": "usd",
-                "order": "price_change_percentage_24h_desc",
-                "per_page": 20,
-                "page": 1,
-                "price_change_percentage": "24h",
-            },
-            timeout=10
-        )
-        for coin in r.json():
-            sym = coin["symbol"].upper()
-            if sym not in BLACKLIST and coin.get("price_change_percentage_24h", 0) > 3:
-                symbols.append(sym)
-    except Exception as e:
-        print(f"  Gainers error: {e}")
+    # Intentar CoinGecko gainers
+    if coingecko_ok:
+        try:
+            r = requests.get(
+                "https://api.coingecko.com/api/v3/coins/markets",
+                params={
+                    "vs_currency": "usd",
+                    "order": "price_change_percentage_24h_desc",
+                    "per_page": 20,
+                    "page": 1,
+                    "price_change_percentage": "24h",
+                },
+                timeout=10
+            )
+            if r.status_code == 200:
+                for coin in r.json():
+                    sym = coin["symbol"].upper()
+                    if sym not in BLACKLIST and coin.get("price_change_percentage_24h", 0) > 3:
+                        symbols.append(sym)
+        except Exception as e:
+            print(f"  CoinGecko gainers no disponible: {e}")
+
+    # Si CoinGecko no devolvió nada, usar watchlist de respaldo
+    if not symbols:
+        print("  Usando watchlist de respaldo...")
+        symbols = [s.replace("USDT", "") for s in FALLBACK_WATCHLIST]
 
     # Deduplicar
     seen, unique = set(), []
@@ -83,7 +107,7 @@ def get_trending_coins(top_n=15):
             seen.add(s)
             unique.append(s)
 
-    # Verificar que existen en Binance con par USDT
+    # Verificar disponibilidad en Binance
     validos = []
     for sym in unique[:top_n + 10]:
         pair = sym + "USDT"
@@ -100,7 +124,7 @@ def get_trending_coins(top_n=15):
         except:
             continue
 
-    print(f"  Trending en Binance ({len(validos)}): {[v.replace('USDT','') for v in validos]}")
+    print(f"  Coins válidos ({len(validos)}): {[v.replace('USDT','') for v in validos]}")
     return validos
 
 
@@ -136,9 +160,10 @@ def get_ticker(symbol):
 def get_lunarcrush(symbol):
     try:
         coin = symbol.replace("USDT", "").lower()
+        key  = os.environ.get("LUNARCRUSH_API_KEY", "")
         r = requests.get(
             f"https://lunarcrush.com/api4/public/coins/{coin}/v1",
-            headers={"Authorization": f"Bearer {os.environ['LUNARCRUSH_API_KEY']}"},
+            headers={"Authorization": f"Bearer {key}"},
             timeout=10
         )
         d = r.json().get("data", {})
@@ -166,11 +191,26 @@ def get_fear_greed():
 def get_mercado_global():
     try:
         r = requests.get("https://api.coingecko.com/api/v3/global", timeout=10)
-        d = r.json()["data"]
+        if r.status_code == 200:
+            d = r.json()["data"]
+            return {
+                "btc_dominancia":  round(d["market_cap_percentage"]["btc"], 1),
+                "eth_dominancia":  round(d["market_cap_percentage"].get("eth", 0), 1),
+                "cambio_mcap_24h": round(d["market_cap_change_percentage_24h_usd"], 2),
+            }
+    except:
+        pass
+    # Fallback: obtener desde Binance
+    try:
+        r = requests.get(
+            f"{BASE_BINANCE}/api/v3/ticker/24hr",
+            params={"symbol": "BTCUSDT"}, timeout=10
+        )
+        d = r.json()
         return {
-            "btc_dominancia":  round(d["market_cap_percentage"]["btc"], 1),
-            "eth_dominancia":  round(d["market_cap_percentage"].get("eth", 0), 1),
-            "cambio_mcap_24h": round(d["market_cap_change_percentage_24h_usd"], 2),
+            "btc_dominancia":  0,
+            "eth_dominancia":  0,
+            "cambio_mcap_24h": round(float(d["priceChangePercent"]), 2),
         }
     except:
         return {"btc_dominancia": 0, "cambio_mcap_24h": 0}
@@ -244,12 +284,11 @@ def recolectar_datos(portfolio):
 
 
 # ─────────────────────────────────────────────────────────────
-#  ESCANEAR CANDIDATOS TRENDING
+#  ESCANEAR CANDIDATOS
 # ─────────────────────────────────────────────────────────────
 
 def escanear_candidatos(excluir=[]):
-    """Analiza las trending coins y devuelve las 5 mejores rankeadas."""
-    print("  Escaneando candidatos trending...")
+    print("  Escaneando candidatos...")
     trending = get_trending_coins(top_n=15)
 
     candidatos = []
@@ -266,13 +305,13 @@ def escanear_candidatos(excluir=[]):
             tkr = data["ticker_24h"]
 
             score = 0
-            if 35 < t["rsi_14"] < 65:         score += 3   # RSI en zona ideal
-            if t["ema_20"] > t["ema_50"]:      score += 2   # tendencia alcista
-            if t["volume_ratio"] > 1.2:        score += 2   # volumen creciente
-            if lc["galaxy_score"] > 50:        score += 2   # buen sentimiento social
-            if lc["sentiment"] > 3:            score += 1   # sentimiento positivo
-            if tkr["change_pct"] > 2:          score += 1   # subiendo hoy
-            if t["price"] > t["vwap"]:         score += 1   # sobre VWAP
+            if 35 < t["rsi_14"] < 65:        score += 3
+            if t["ema_20"] > t["ema_50"]:     score += 2
+            if t["volume_ratio"] > 1.2:       score += 2
+            if lc["galaxy_score"] > 50:       score += 2
+            if lc["sentiment"] > 3:           score += 1
+            if tkr["change_pct"] > 2:         score += 1
+            if t["price"] > t["vwap"]:        score += 1
 
             candidatos.append({
                 "symbol":       symbol,
@@ -286,11 +325,10 @@ def escanear_candidatos(excluir=[]):
             })
         except Exception as e:
             print(f"    Skip {symbol}: {e}")
-            continue
 
     candidatos.sort(key=lambda x: x["score"], reverse=True)
     top = candidatos[:5]
-    print(f"  Top candidatos: {[c['symbol'] for c in top]}")
+    print(f"  Top 5: {[c['symbol'] for c in top]}")
     return top
 
 
@@ -298,16 +336,16 @@ def escanear_candidatos(excluir=[]):
 #  CEREBRO IA
 # ─────────────────────────────────────────────────────────────
 
-SYSTEM = """Sos un gestor de portfolio de crypto con perfil conservador-agresivo.
+SYSTEM = """Sos un gestor de portfolio de crypto conservador-agresivo.
 Gestionás 2 líneas de inversión independientes. Objetivo: 50-100% mensual.
 Solo operás altcoins trending — NUNCA sugerís BTC ni ETH como destino.
 
 Recibís por cada línea:
 - Posición actual, precio de entrada, P&L%
-- Indicadores técnicos: EMA20/50, RSI14, Bollinger, VWAP, volumen relativo
+- Indicadores: EMA20/50, RSI14, Bollinger, VWAP, volumen relativo
 - Sentimiento: LunarCrush Galaxy Score
 - Contexto global: Fear & Greed, dominancia BTC, cambio mcap 24h
-- Lista de candidatos trending pre-rankeados con score 0-12
+- Candidatos trending pre-rankeados con score 0-12
 
 CUÁNDO VENDER:
 - RSI > 78 con volumen cayendo
@@ -318,13 +356,10 @@ CUÁNDO VENDER:
 - BTC cae > 5% en 24h → mover a USDT
 
 CUÁNDO COMPRAR:
-- Elegir del top de candidatos_trending recibidos (score más alto)
-- RSI entre 38-62
-- EMA 20 sobre EMA 50
-- Volume ratio > 1.2
-- Fear & Greed entre 20-68
+- Elegir del top de candidatos_trending (score más alto)
+- RSI entre 38-62 + EMA 20 sobre EMA 50
+- Volume ratio > 1.2 + Fear & Greed entre 20-68
 - Nunca las 2 líneas en la misma moneda
-- Explicar brevemente por qué esa moneda sobre las demás
 
 NIVELES:
 - Stop loss: -8% del precio de entrada
@@ -400,7 +435,7 @@ def analizar_portfolio(portfolio, market_data, candidatos=None):
         },
     }
 
-    msg = ANTHROPIC.messages.create(
+    msg = get_anthropic().messages.create(
         model="claude-haiku-4-5-20251001",
         max_tokens=700,
         system=SYSTEM,
@@ -416,7 +451,7 @@ def analizar_portfolio(portfolio, market_data, candidatos=None):
 
 
 # ─────────────────────────────────────────────────────────────
-#  FORMATO DE MENSAJES
+#  FORMATO Y ENVIO
 # ─────────────────────────────────────────────────────────────
 
 def formato_estado(portfolio, analisis, candidatos=None):
@@ -428,32 +463,26 @@ def formato_estado(portfolio, analisis, candidatos=None):
     def bloque(key, num):
         l = lineas[key]
         a = analisis.get(key, {})
-
         accion_icon = {
-            "MANTENER": "[ = ]",
-            "VENDER":   "[ VENDER ]",
-            "COMPRAR":  "[ COMPRAR ]",
-            "ROTAR":    "[ ROTAR ]",
+            "MANTENER": "[ = ]", "VENDER": "[ VENDER ]",
+            "COMPRAR":  "[ COMPRAR ]", "ROTAR": "[ ROTAR ]",
         }.get(a.get("accion", ""), "[-]")
 
         texto = (
             f"\n-- Linea {num} --\n"
             f"Posicion: {l['moneda_actual']}  |  Capital: ${l['capital_usd']:.2f}\n"
         )
-
         if l["moneda_actual"] != "USDT" and l["precio_entrada"] > 0:
             precio_actual = _market_cache.get(key, {}).get("technical", {}).get("price", l["precio_entrada"])
             pl = round((precio_actual - l["precio_entrada"]) / l["precio_entrada"] * 100, 2)
             signo = "+" if pl >= 0 else ""
             texto += f"Entrada: ${l['precio_entrada']}  |  P&L: {signo}{pl:.1f}%\n"
 
-        texto += (
-            f"Accion: {accion_icon}  [{a.get('urgencia', '-')}]\n"
-            f"{a.get('razonamiento', '')}\n"
-        )
+        texto += f"Accion: {accion_icon}  [{a.get('urgencia', '-')}]\n{a.get('razonamiento', '')}\n"
+
         if a.get("tp1_precio"):
             texto += f"TP1: ${a['tp1_precio']}  TP2: ${a.get('tp2_precio','?')}  SL: ${a.get('sl_precio','?')}\n"
-        if a.get("moneda_destino") and a["moneda_destino"] != "null":
+        if a.get("moneda_destino") and a["moneda_destino"] not in (None, "null"):
             texto += f"Destino: {a['moneda_destino']}\n"
         return texto
 
@@ -468,89 +497,88 @@ def formato_estado(portfolio, analisis, candidatos=None):
     if candidatos:
         resultado += "\n-- Top Trending --\n"
         for c in candidatos[:3]:
+            s = "+" if c["change_pct"] >= 0 else ""
             resultado += (
                 f"{c['symbol'].replace('USDT','')}: "
-                f"RSI {c['rsi']} | Score {c['score']}/12 | "
-                f"{'+' if c['change_pct'] >= 0 else ''}{c['change_pct']:.1f}% 24h\n"
+                f"RSI {c['rsi']} | Score {c['score']}/12 | {s}{c['change_pct']:.1f}% 24h\n"
             )
 
     return resultado
 
 async def send_telegram(text):
+    from telegram import Bot
     bot = Bot(token=BOT_TOKEN)
     await bot.send_message(chat_id=CHAT_ID, text=text)
 
 
 # ─────────────────────────────────────────────────────────────
-#  COMANDOS DEL BOT
-# ─────────────────────────────────────────────────────────────
-
-async def cmd_estado(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Analizando portfolio y mercado, un momento...")
-    try:
-        portfolio   = load_portfolio()
-        market_data = recolectar_datos(portfolio)
-        candidatos  = escanear_candidatos(excluir=[
-            portfolio["lineas"][k]["moneda_actual"].replace("USDT","")
-            for k in ["linea_1","linea_2"]
-            if portfolio["lineas"][k]["moneda_actual"] != "USDT"
-        ])
-        analisis = analizar_portfolio(portfolio, market_data, candidatos)
-        await update.message.reply_text(formato_estado(portfolio, analisis, candidatos))
-    except Exception as e:
-        await update.message.reply_text(f"Error: {e}")
-
-async def cmd_portfolio(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    p = load_portfolio()
-    l = p["lineas"]
-    msg = (
-        f"PORTFOLIO ACTUAL\n\n"
-        f"Linea 1: {l['linea_1']['moneda_actual']}\n"
-        f"  Capital: ${l['linea_1']['capital_usd']:.2f}\n"
-        f"  Entrada: ${l['linea_1']['precio_entrada']}\n"
-        f"  Fecha:   {l['linea_1']['fecha_entrada'] or 'sin posicion'}\n\n"
-        f"Linea 2: {l['linea_2']['moneda_actual']}\n"
-        f"  Capital: ${l['linea_2']['capital_usd']:.2f}\n"
-        f"  Entrada: ${l['linea_2']['precio_entrada']}\n"
-        f"  Fecha:   {l['linea_2']['fecha_entrada'] or 'sin posicion'}\n\n"
-        f"Actualizado: {p['ultima_actualizacion'] or 'nunca'}"
-    )
-    await update.message.reply_text(msg)
-
-async def cmd_trending(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Buscando trending coins, un momento...")
-    try:
-        candidatos = escanear_candidatos()
-        msg = "TOP TRENDING AHORA\n\n"
-        for i, c in enumerate(candidatos, 1):
-            msg += (
-                f"{i}. {c['symbol'].replace('USDT','')}\n"
-                f"   Score: {c['score']}/12  |  RSI: {c['rsi']}\n"
-                f"   24h: {'+' if c['change_pct'] >= 0 else ''}{c['change_pct']:.1f}%"
-                f"  |  Vol: x{c['volume_ratio']}\n"
-                f"   Galaxy: {c['galaxy_score']}  |  Tendencia: {c['ema_trend']}\n\n"
-            )
-        await update.message.reply_text(msg)
-    except Exception as e:
-        await update.message.reply_text(f"Error: {e}")
-
-async def cmd_ayuda(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "COMANDOS DISPONIBLES\n\n"
-        "/estado    — analisis completo + trending\n"
-        "/portfolio — ver posiciones actuales\n"
-        "/trending  — ver top monedas del momento\n"
-        "/ayuda     — esta ayuda\n\n"
-        "Recibes alertas automaticas cada 6 horas\n"
-        "y un reporte diario a las 8:00 AM UTC."
-    )
-
-
-# ─────────────────────────────────────────────────────────────
-#  MAIN
+#  COMANDOS DEL BOT (solo se usan cuando corres agent.py local)
 # ─────────────────────────────────────────────────────────────
 
 def main():
+    from telegram import Update
+    from telegram.ext import Application, CommandHandler, ContextTypes
+
+    async def cmd_estado(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        await update.message.reply_text("Analizando, un momento...")
+        try:
+            portfolio  = load_portfolio()
+            mdata      = recolectar_datos(portfolio)
+            excluir    = [
+                portfolio["lineas"][k]["moneda_actual"].replace("USDT","")
+                for k in ["linea_1","linea_2"]
+                if portfolio["lineas"][k]["moneda_actual"] != "USDT"
+            ]
+            candidatos = escanear_candidatos(excluir=excluir)
+            analisis   = analizar_portfolio(portfolio, mdata, candidatos)
+            await update.message.reply_text(formato_estado(portfolio, analisis, candidatos))
+        except Exception as e:
+            await update.message.reply_text(f"Error: {e}")
+
+    async def cmd_portfolio(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        p = load_portfolio()
+        l = p["lineas"]
+        msg = (
+            f"PORTFOLIO ACTUAL\n\n"
+            f"Linea 1: {l['linea_1']['moneda_actual']}\n"
+            f"  Capital: ${l['linea_1']['capital_usd']:.2f}\n"
+            f"  Entrada: ${l['linea_1']['precio_entrada']}\n"
+            f"  Fecha: {l['linea_1']['fecha_entrada'] or 'sin posicion'}\n\n"
+            f"Linea 2: {l['linea_2']['moneda_actual']}\n"
+            f"  Capital: ${l['linea_2']['capital_usd']:.2f}\n"
+            f"  Entrada: ${l['linea_2']['precio_entrada']}\n"
+            f"  Fecha: {l['linea_2']['fecha_entrada'] or 'sin posicion'}\n\n"
+            f"Actualizado: {p['ultima_actualizacion'] or 'nunca'}"
+        )
+        await update.message.reply_text(msg)
+
+    async def cmd_trending(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        await update.message.reply_text("Buscando trending coins...")
+        try:
+            candidatos = escanear_candidatos()
+            msg = "TOP TRENDING AHORA\n\n"
+            for i, c in enumerate(candidatos, 1):
+                s = "+" if c["change_pct"] >= 0 else ""
+                msg += (
+                    f"{i}. {c['symbol'].replace('USDT','')}\n"
+                    f"   Score: {c['score']}/12  RSI: {c['rsi']}\n"
+                    f"   24h: {s}{c['change_pct']:.1f}%  Vol: x{c['volume_ratio']}\n"
+                    f"   Galaxy: {c['galaxy_score']}  Tend: {c['ema_trend']}\n\n"
+                )
+            await update.message.reply_text(msg)
+        except Exception as e:
+            await update.message.reply_text(f"Error: {e}")
+
+    async def cmd_ayuda(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        await update.message.reply_text(
+            "COMANDOS\n\n"
+            "/estado    — analisis completo + trending\n"
+            "/portfolio — ver posiciones actuales\n"
+            "/trending  — top monedas del momento\n"
+            "/ayuda     — esta ayuda\n\n"
+            "Alertas automaticas cada 6h via GitHub Actions."
+        )
+
     app = Application.builder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("estado",    cmd_estado))
     app.add_handler(CommandHandler("portfolio", cmd_portfolio))
