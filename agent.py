@@ -17,11 +17,10 @@ def get_anthropic():
         _anthropic_client = Anthropic(api_key=key)
     return _anthropic_client
 
-BOT_TOKEN     = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-CHAT_ID       = os.environ.get("TELEGRAM_CHAT_ID", "")
-PORTFOLIO_F   = "portfolio.json"
-BASE_KUCOIN   = "https://api.kucoin.com"
-BASE_BINANCE  = "https://api.binance.com"
+BOT_TOKEN    = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+CHAT_ID      = os.environ.get("TELEGRAM_CHAT_ID", "")
+PORTFOLIO_F  = "portfolio.json"
+BASE_KUCOIN  = "https://api.kucoin.com"
 
 BLACKLIST = {"USDT","USDC","BUSD","DAI","TUSD","USDP","BTC","ETH","WBTC","STETH"}
 
@@ -53,18 +52,12 @@ def save_portfolio(p):
 # ─────────────────────────────────────────────────────────────
 
 def to_kucoin(symbol):
-    """SOLUSDT → SOL-USDT"""
     if "-" in symbol:
-        return symbol
-    return symbol.replace("USDT", "") + "-USDT"
-
-def to_binance(symbol):
-    """SOL-USDT → SOLUSDT"""
-    return symbol.replace("-", "")
+        return symbol.upper()
+    return symbol.replace("USDT", "").upper() + "-USDT"
 
 def base_coin(symbol):
-    """SOL-USDT o SOLUSDT → SOL"""
-    return symbol.replace("-USDT", "").replace("USDT", "")
+    return symbol.replace("-USDT", "").replace("USDT", "").upper()
 
 
 # ─────────────────────────────────────────────────────────────
@@ -111,14 +104,12 @@ def get_trending_coins(top_n=15):
         except Exception as e:
             print(f"  CoinGecko gainers no disponible: {e}")
 
-    # Deduplicar
     seen, unique = set(), []
     for s in symbols:
         if s not in seen:
             seen.add(s)
             unique.append(s)
 
-    # Verificar en KuCoin (sin restricciones geográficas)
     validos = []
     for sym in unique[:top_n + 10]:
         pair = sym + "-USDT"
@@ -135,7 +126,6 @@ def get_trending_coins(top_n=15):
         except:
             continue
 
-    # Fallback si ninguna pasó la validación
     if not validos:
         print("  Usando watchlist de respaldo...")
         validos = list(FALLBACK_WATCHLIST[:top_n])
@@ -145,11 +135,10 @@ def get_trending_coins(top_n=15):
 
 
 # ─────────────────────────────────────────────────────────────
-#  DATOS DE MERCADO — KuCoin
+#  DATOS DE MERCADO
 # ─────────────────────────────────────────────────────────────
 
 def get_klines(symbol, interval="4hour", limit=100):
-    """Obtiene velas OHLCV desde KuCoin. Sin restricciones geográficas."""
     kc_symbol = to_kucoin(symbol)
     r = requests.get(
         f"{BASE_KUCOIN}/api/v1/market/candles",
@@ -160,9 +149,6 @@ def get_klines(symbol, interval="4hour", limit=100):
     data = r.json().get("data", [])
     if not data:
         raise ValueError(f"Sin datos de velas para {kc_symbol}")
-
-    # KuCoin devuelve las velas en orden inverso (más reciente primero)
-    # y el formato es: [time, open, close, high, low, volume, turnover]
     candles = []
     for d in reversed(data[:limit]):
         candles.append({
@@ -175,7 +161,6 @@ def get_klines(symbol, interval="4hour", limit=100):
     return candles
 
 def get_ticker(symbol):
-    """Ticker 24h desde KuCoin."""
     kc_symbol = to_kucoin(symbol)
     r = requests.get(
         f"{BASE_KUCOIN}/api/v1/market/stats",
@@ -192,6 +177,14 @@ def get_ticker(symbol):
         "volume_24h": float(d.get("volValue", 0) or 0),
         "price":      last,
     }
+
+def get_price(symbol):
+    """Obtiene solo el precio actual de una moneda."""
+    try:
+        tkr = get_ticker(to_kucoin(symbol))
+        return tkr["price"]
+    except:
+        return 0
 
 def get_lunarcrush(symbol):
     try:
@@ -236,7 +229,6 @@ def get_mercado_global():
             }
     except:
         pass
-    # Fallback desde KuCoin
     try:
         r = requests.get(
             f"{BASE_KUCOIN}/api/v1/market/stats",
@@ -310,8 +302,7 @@ def recolectar_datos(portfolio):
     for key in ["linea_1", "linea_2"]:
         moneda = portfolio["lineas"][key]["moneda_actual"]
         if moneda != "USDT":
-            sym = to_kucoin(moneda)
-            data[key] = full_market_data(sym)
+            data[key] = full_market_data(to_kucoin(moneda))
         else:
             data[key] = {"symbol": "USDT", "technical": {"price": 1.0}, "en_usdt": True}
     _market_cache = data
@@ -503,10 +494,8 @@ def formato_estado(portfolio, analisis, candidatos=None):
         l = lineas[key]
         a = analisis.get(key, {})
         accion_icon = {
-            "MANTENER": "[ = ]",
-            "VENDER":   "[ VENDER ]",
-            "COMPRAR":  "[ COMPRAR ]",
-            "ROTAR":    "[ ROTAR ]",
+            "MANTENER": "[ = ]", "VENDER": "[ VENDER ]",
+            "COMPRAR":  "[ COMPRAR ]", "ROTAR": "[ ROTAR ]",
             "ESPERAR":  "[ ESPERAR ]",
         }.get(a.get("accion", ""), "[-]")
 
@@ -561,6 +550,23 @@ def main():
     from telegram import Update
     from telegram.ext import Application, CommandHandler, ContextTypes
 
+    # ── Estados de conversación para /comprar y /vender ──
+    compra_pendiente = {}
+    venta_pendiente  = {}
+
+    async def cmd_ayuda(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        await update.message.reply_text(
+            "COMANDOS\n\n"
+            "/estado       — analisis completo + trending\n"
+            "/portfolio    — ver posiciones actuales\n"
+            "/trending     — top monedas del momento\n"
+            "/comprar      — registrar una compra\n"
+            "/vender       — registrar una venta\n"
+            "/capital      — actualizar capital de una linea\n"
+            "/ayuda        — esta ayuda\n\n"
+            "Alertas automaticas cada 6h via GitHub Actions."
+        )
+
     async def cmd_estado(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Analizando, un momento...")
         try:
@@ -599,7 +605,7 @@ def main():
         try:
             candidatos = escanear_candidatos()
             if not candidatos:
-                await update.message.reply_text("Sin candidatos con señales claras ahora. Mercado en pausa.")
+                await update.message.reply_text("Sin candidatos con señales claras ahora.")
                 return
             msg = "TOP TRENDING AHORA\n\n"
             for i, c in enumerate(candidatos, 1):
@@ -614,23 +620,202 @@ def main():
         except Exception as e:
             await update.message.reply_text(f"Error: {e}")
 
-    async def cmd_ayuda(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # ── /comprar ──────────────────────────────────────────────
+    # Uso: /comprar 1 SOL 134.50
+    #      linea  moneda  precio_de_compra
+    async def cmd_comprar(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        args = context.args
+        if len(args) != 3:
+            await update.message.reply_text(
+                "Uso: /comprar <linea> <moneda> <precio>\n\n"
+                "Ejemplos:\n"
+                "  /comprar 1 SOL 134.50\n"
+                "  /comprar 2 TAO 380.00\n\n"
+                "La linea es 1 o 2.\n"
+                "El precio es el que pagaste en tu exchange."
+            )
+            return
+
+        linea_num, moneda, precio_str = args
+        if linea_num not in ("1", "2"):
+            await update.message.reply_text("La linea tiene que ser 1 o 2.")
+            return
+
+        try:
+            precio = float(precio_str)
+        except ValueError:
+            await update.message.reply_text(f"Precio invalido: {precio_str}")
+            return
+
+        linea_key = f"linea_{linea_num}"
+        moneda    = moneda.upper()
+        symbol    = to_kucoin(moneda)
+
+        p = load_portfolio()
+        l = p["lineas"][linea_key]
+
+        # Guardar historial de la posición anterior si la había
+        if l["moneda_actual"] != "USDT" and l["precio_entrada"] > 0:
+            precio_actual = get_price(l["moneda_actual"])
+            pl = round((precio_actual - l["precio_entrada"]) / l["precio_entrada"] * 100, 2) if precio_actual > 0 else 0
+            l["historial"].append({
+                "accion":         "venta_previa_a_compra",
+                "moneda":         l["moneda_actual"],
+                "precio_entrada": l["precio_entrada"],
+                "precio_salida":  precio_actual,
+                "pl_pct":         pl,
+                "fecha":          datetime.utcnow().isoformat(),
+            })
+
+        # Registrar la nueva compra
+        l["moneda_actual"]  = symbol
+        l["precio_entrada"] = precio
+        l["fecha_entrada"]  = datetime.utcnow().strftime("%Y-%m-%d")
+        l["historial"].append({
+            "accion":         "compra",
+            "moneda":         symbol,
+            "precio_entrada": precio,
+            "capital_usd":    l["capital_usd"],
+            "fecha":          datetime.utcnow().isoformat(),
+        })
+
+        save_portfolio(p)
+
+        sl  = round(precio * 0.92, 4)
+        tp1 = round(precio * 1.25, 4)
+        tp2 = round(precio * 1.40, 4)
+
         await update.message.reply_text(
-            "COMANDOS\n\n"
-            "/estado    — analisis completo + trending\n"
-            "/portfolio — ver posiciones actuales\n"
-            "/trending  — top monedas del momento\n"
-            "/ayuda     — esta ayuda\n\n"
-            "Alertas automaticas cada 6h via GitHub Actions."
+            f"COMPRA REGISTRADA\n\n"
+            f"Linea {linea_num}: {symbol}\n"
+            f"Precio entrada: ${precio}\n"
+            f"Capital: ${l['capital_usd']:.2f}\n\n"
+            f"Stop Loss:      ${sl}  (-8%)\n"
+            f"Take Profit 1:  ${tp1}  (+25%)\n"
+            f"Take Profit 2:  ${tp2}  (+40%)\n\n"
+            f"Pone una alerta en tu exchange para el SL y los TP."
+        )
+
+    # ── /vender ───────────────────────────────────────────────
+    # Uso: /vender 1 134.50
+    #      linea  precio_de_venta
+    async def cmd_vender(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        args = context.args
+        if len(args) != 2:
+            await update.message.reply_text(
+                "Uso: /vender <linea> <precio>\n\n"
+                "Ejemplos:\n"
+                "  /vender 1 168.00\n"
+                "  /vender 2 420.50\n\n"
+                "El precio es el que recibiste al vender."
+            )
+            return
+
+        linea_num, precio_str = args
+        if linea_num not in ("1", "2"):
+            await update.message.reply_text("La linea tiene que ser 1 o 2.")
+            return
+
+        try:
+            precio_venta = float(precio_str)
+        except ValueError:
+            await update.message.reply_text(f"Precio invalido: {precio_str}")
+            return
+
+        linea_key = f"linea_{linea_num}"
+        p = load_portfolio()
+        l = p["lineas"][linea_key]
+
+        if l["moneda_actual"] == "USDT":
+            await update.message.reply_text(f"La linea {linea_num} ya esta en USDT, no hay posicion abierta.")
+            return
+
+        precio_entrada = l["precio_entrada"]
+        moneda         = l["moneda_actual"]
+        capital        = l["capital_usd"]
+
+        pl_pct = round((precio_venta - precio_entrada) / precio_entrada * 100, 2) if precio_entrada > 0 else 0
+        nuevo_capital = round(capital * (1 + pl_pct / 100), 2)
+        signo = "+" if pl_pct >= 0 else ""
+
+        # Guardar en historial
+        l["historial"].append({
+            "accion":         "venta",
+            "moneda":         moneda,
+            "precio_entrada": precio_entrada,
+            "precio_salida":  precio_venta,
+            "pl_pct":         pl_pct,
+            "capital_antes":  capital,
+            "capital_despues": nuevo_capital,
+            "fecha":          datetime.utcnow().isoformat(),
+        })
+
+        # Resetear la línea a USDT con capital actualizado
+        l["moneda_actual"]  = "USDT"
+        l["precio_entrada"] = 0
+        l["fecha_entrada"]  = None
+        l["capital_usd"]    = nuevo_capital
+
+        save_portfolio(p)
+
+        emoji = "GANANCIA" if pl_pct >= 0 else "PERDIDA"
+        await update.message.reply_text(
+            f"VENTA REGISTRADA — {emoji}\n\n"
+            f"Linea {linea_num}: {moneda}\n"
+            f"Entrada: ${precio_entrada}  →  Salida: ${precio_venta}\n"
+            f"Resultado: {signo}{pl_pct}%\n\n"
+            f"Capital anterior: ${capital:.2f}\n"
+            f"Capital actual:   ${nuevo_capital:.2f}\n\n"
+            f"La linea quedo en USDT. Manda /trending para ver proximas oportunidades."
+        )
+
+    # ── /capital ──────────────────────────────────────────────
+    # Uso: /capital 1 8.33
+    # Para cargar o actualizar el capital de una línea
+    async def cmd_capital(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        args = context.args
+        if len(args) != 2:
+            await update.message.reply_text(
+                "Uso: /capital <linea> <monto_usd>\n\n"
+                "Ejemplos:\n"
+                "  /capital 1 8.33\n"
+                "  /capital 2 8.33\n\n"
+                "Converte tus pesos al tipo de cambio blue antes de cargar."
+            )
+            return
+
+        linea_num, monto_str = args
+        if linea_num not in ("1", "2"):
+            await update.message.reply_text("La linea tiene que ser 1 o 2.")
+            return
+
+        try:
+            monto = float(monto_str)
+        except ValueError:
+            await update.message.reply_text(f"Monto invalido: {monto_str}")
+            return
+
+        linea_key = f"linea_{linea_num}"
+        p = load_portfolio()
+        p["lineas"][linea_key]["capital_usd"] = monto
+        save_portfolio(p)
+
+        await update.message.reply_text(
+            f"Capital actualizado\n\n"
+            f"Linea {linea_num}: ${monto:.2f} USD\n\n"
+            f"Manda /portfolio para ver el estado completo."
         )
 
     app = Application.builder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("estado",    cmd_estado))
     app.add_handler(CommandHandler("portfolio", cmd_portfolio))
     app.add_handler(CommandHandler("trending",  cmd_trending))
+    app.add_handler(CommandHandler("comprar",   cmd_comprar))
+    app.add_handler(CommandHandler("vender",    cmd_vender))
+    app.add_handler(CommandHandler("capital",   cmd_capital))
     app.add_handler(CommandHandler("ayuda",     cmd_ayuda))
     app.add_handler(CommandHandler("help",      cmd_ayuda))
-    print("Bot corriendo. Comandos: /estado /portfolio /trending /ayuda")
+    print("Bot corriendo. Comandos: /estado /portfolio /trending /comprar /vender /capital /ayuda")
     app.run_polling()
 
 if __name__ == "__main__":
