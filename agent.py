@@ -95,8 +95,8 @@ def get_trending_coins(top_n=15):
         except Exception as e:
             print(f"  CoinGecko gainers no disponible: {e}")
 
-    # Si CoinGecko no devolvió nada, usar watchlist de respaldo
-    if not symbols:
+    # Si no hay coins válidos en Binance, usar watchlist de respaldo
+    if not validos:
         print("  Usando watchlist de respaldo...")
         symbols = [s.replace("USDT", "") for s in FALLBACK_WATCHLIST]
 
