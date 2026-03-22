@@ -17,17 +17,18 @@ def get_anthropic():
         _anthropic_client = Anthropic(api_key=key)
     return _anthropic_client
 
-BOT_TOKEN    = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-CHAT_ID      = os.environ.get("TELEGRAM_CHAT_ID", "")
-PORTFOLIO_F  = "portfolio.json"
-BASE_BINANCE = "https://api.binance.com"
+BOT_TOKEN     = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+CHAT_ID       = os.environ.get("TELEGRAM_CHAT_ID", "")
+PORTFOLIO_F   = "portfolio.json"
+BASE_KUCOIN   = "https://api.kucoin.com"
+BASE_BINANCE  = "https://api.binance.com"
 
 BLACKLIST = {"USDT","USDC","BUSD","DAI","TUSD","USDP","BTC","ETH","WBTC","STETH"}
 
 FALLBACK_WATCHLIST = [
-    "SOLUSDT","BNBUSDT","AVAXUSDT","DOTUSDT","LINKUSDT",
-    "MATICUSDT","ARBUSDT","OPUSDT","INJUSDT","SUIUSDT",
-    "APTUSDT","SEIUSDT","TIAUSDT","JUPUSDT","WLDUSDT"
+    "SOL-USDT","BNB-USDT","AVAX-USDT","DOT-USDT","LINK-USDT",
+    "MATIC-USDT","ARB-USDT","OP-USDT","INJ-USDT","SUI-USDT",
+    "APT-USDT","SEI-USDT","TIA-USDT","JUP-USDT","WLD-USDT"
 ]
 
 _market_cache = {}
@@ -48,7 +49,26 @@ def save_portfolio(p):
 
 
 # ─────────────────────────────────────────────────────────────
-#  TRENDING COINS con fallback
+#  HELPERS DE SÍMBOLO
+# ─────────────────────────────────────────────────────────────
+
+def to_kucoin(symbol):
+    """SOLUSDT → SOL-USDT"""
+    if "-" in symbol:
+        return symbol
+    return symbol.replace("USDT", "") + "-USDT"
+
+def to_binance(symbol):
+    """SOL-USDT → SOLUSDT"""
+    return symbol.replace("-", "")
+
+def base_coin(symbol):
+    """SOL-USDT o SOLUSDT → SOL"""
+    return symbol.replace("-USDT", "").replace("USDT", "")
+
+
+# ─────────────────────────────────────────────────────────────
+#  TRENDING COINS
 # ─────────────────────────────────────────────────────────────
 
 def get_trending_coins(top_n=15):
@@ -98,64 +118,84 @@ def get_trending_coins(top_n=15):
             seen.add(s)
             unique.append(s)
 
-    # Verificar en Binance
+    # Verificar en KuCoin (sin restricciones geográficas)
     validos = []
     for sym in unique[:top_n + 10]:
-        pair = sym + "USDT"
+        pair = sym + "-USDT"
         try:
             r = requests.get(
-                f"{BASE_BINANCE}/api/v3/ticker/price",
+                f"{BASE_KUCOIN}/api/v1/market/stats",
                 params={"symbol": pair},
                 timeout=5
             )
-            if r.status_code == 200:
+            if r.status_code == 200 and r.json().get("data"):
                 validos.append(pair)
                 if len(validos) >= top_n:
                     break
         except:
             continue
 
-    # Fallback si ninguna coin pasó la validación de Binance
+    # Fallback si ninguna pasó la validación
     if not validos:
         print("  Usando watchlist de respaldo...")
         validos = list(FALLBACK_WATCHLIST[:top_n])
 
-    print(f"  Coins válidos ({len(validos)}): {[v.replace('USDT','') for v in validos]}")
+    print(f"  Coins válidos ({len(validos)}): {[base_coin(v) for v in validos]}")
     return validos
 
 
 # ─────────────────────────────────────────────────────────────
-#  DATOS DE MERCADO
+#  DATOS DE MERCADO — KuCoin
 # ─────────────────────────────────────────────────────────────
 
-def get_klines(symbol, interval="4h", limit=100):
+def get_klines(symbol, interval="4hour", limit=100):
+    """Obtiene velas OHLCV desde KuCoin. Sin restricciones geográficas."""
+    kc_symbol = to_kucoin(symbol)
     r = requests.get(
-        f"{BASE_BINANCE}/api/v3/klines",
-        params={"symbol": symbol, "interval": interval, "limit": limit},
+        f"{BASE_KUCOIN}/api/v1/market/candles",
+        params={"type": interval, "symbol": kc_symbol},
         timeout=10
     )
     r.raise_for_status()
-    return [
-        {"open": float(d[1]), "high": float(d[2]),
-         "low": float(d[3]), "close": float(d[4]), "volume": float(d[5])}
-        for d in r.json()
-    ]
+    data = r.json().get("data", [])
+    if not data:
+        raise ValueError(f"Sin datos de velas para {kc_symbol}")
+
+    # KuCoin devuelve las velas en orden inverso (más reciente primero)
+    # y el formato es: [time, open, close, high, low, volume, turnover]
+    candles = []
+    for d in reversed(data[:limit]):
+        candles.append({
+            "open":   float(d[1]),
+            "close":  float(d[2]),
+            "high":   float(d[3]),
+            "low":    float(d[4]),
+            "volume": float(d[5]),
+        })
+    return candles
 
 def get_ticker(symbol):
+    """Ticker 24h desde KuCoin."""
+    kc_symbol = to_kucoin(symbol)
     r = requests.get(
-        f"{BASE_BINANCE}/api/v3/ticker/24hr",
-        params={"symbol": symbol}, timeout=10
+        f"{BASE_KUCOIN}/api/v1/market/stats",
+        params={"symbol": kc_symbol},
+        timeout=10
     )
-    d = r.json()
+    r.raise_for_status()
+    d = r.json().get("data", {})
+    last  = float(d.get("last", 0) or 0)
+    open_ = float(d.get("open", last) or last)
+    change_pct = round((last - open_) / open_ * 100, 2) if open_ > 0 else 0
     return {
-        "change_pct": float(d["priceChangePercent"]),
-        "volume_24h": float(d["quoteVolume"]),
-        "price":      float(d["lastPrice"]),
+        "change_pct": change_pct,
+        "volume_24h": float(d.get("volValue", 0) or 0),
+        "price":      last,
     }
 
 def get_lunarcrush(symbol):
     try:
-        coin = symbol.replace("USDT", "").lower()
+        coin = base_coin(symbol).lower()
         key  = os.environ.get("LUNARCRUSH_API_KEY", "")
         r = requests.get(
             f"https://lunarcrush.com/api4/public/coins/{coin}/v1",
@@ -196,17 +236,17 @@ def get_mercado_global():
             }
     except:
         pass
+    # Fallback desde KuCoin
     try:
         r = requests.get(
-            f"{BASE_BINANCE}/api/v3/ticker/24hr",
-            params={"symbol": "BTCUSDT"}, timeout=10
+            f"{BASE_KUCOIN}/api/v1/market/stats",
+            params={"symbol": "BTC-USDT"}, timeout=10
         )
-        d = r.json()
-        return {
-            "btc_dominancia":  0,
-            "eth_dominancia":  0,
-            "cambio_mcap_24h": round(float(d["priceChangePercent"]), 2),
-        }
+        d = r.json().get("data", {})
+        last  = float(d.get("last", 0) or 0)
+        open_ = float(d.get("open", last) or last)
+        change = round((last - open_) / open_ * 100, 2) if open_ > 0 else 0
+        return {"btc_dominancia": 0, "eth_dominancia": 0, "cambio_mcap_24h": change}
     except:
         return {"btc_dominancia": 0, "cambio_mcap_24h": 0}
 
@@ -270,7 +310,7 @@ def recolectar_datos(portfolio):
     for key in ["linea_1", "linea_2"]:
         moneda = portfolio["lineas"][key]["moneda_actual"]
         if moneda != "USDT":
-            sym = moneda if moneda.endswith("USDT") else moneda + "USDT"
+            sym = to_kucoin(moneda)
             data[key] = full_market_data(sym)
         else:
             data[key] = {"symbol": "USDT", "technical": {"price": 1.0}, "en_usdt": True}
@@ -288,11 +328,11 @@ def escanear_candidatos(excluir=[]):
 
     candidatos = []
     for symbol in trending:
-        base = symbol.replace("USDT", "")
-        if base in excluir:
+        coin = base_coin(symbol)
+        if coin in excluir:
             continue
         try:
-            time.sleep(0.3)  # evitar rate limit de Binance
+            time.sleep(0.3)
             data = full_market_data(symbol)
             if "error" in data:
                 print(f"    Error {symbol}: {data['error']}")
@@ -369,7 +409,7 @@ Respondé SOLO JSON sin texto extra:
 {
   "linea_1": {
     "accion": "MANTENER|VENDER|COMPRAR|ROTAR|ESPERAR",
-    "moneda_destino": "par USDT o null",
+    "moneda_destino": "par con guion ej SOL-USDT o null",
     "urgencia": "ALTA|MEDIA|BAJA",
     "razonamiento": "max 200 chars",
     "sl_precio": null,
@@ -379,7 +419,7 @@ Respondé SOLO JSON sin texto extra:
   },
   "linea_2": {
     "accion": "MANTENER|VENDER|COMPRAR|ROTAR|ESPERAR",
-    "moneda_destino": "par USDT o null",
+    "moneda_destino": "par con guion ej SOL-USDT o null",
     "urgencia": "ALTA|MEDIA|BAJA",
     "razonamiento": "max 200 chars",
     "sl_precio": null,
@@ -397,7 +437,7 @@ def analizar_portfolio(portfolio, market_data, candidatos=None):
     mercado    = get_mercado_global()
 
     monedas_activas = [
-        lineas[k]["moneda_actual"].replace("USDT", "")
+        base_coin(lineas[k]["moneda_actual"])
         for k in ["linea_1", "linea_2"]
         if lineas[k]["moneda_actual"] != "USDT"
     ]
@@ -501,7 +541,7 @@ def formato_estado(portfolio, analisis, candidatos=None):
         for c in candidatos[:3]:
             s = "+" if c["change_pct"] >= 0 else ""
             resultado += (
-                f"{c['symbol'].replace('USDT','')}: "
+                f"{base_coin(c['symbol'])}: "
                 f"RSI {c['rsi']} | Score {c['score']}/12 | {s}{c['change_pct']:.1f}% 24h\n"
             )
 
@@ -527,7 +567,7 @@ def main():
             portfolio  = load_portfolio()
             mdata      = recolectar_datos(portfolio)
             excluir    = [
-                portfolio["lineas"][k]["moneda_actual"].replace("USDT","")
+                base_coin(portfolio["lineas"][k]["moneda_actual"])
                 for k in ["linea_1","linea_2"]
                 if portfolio["lineas"][k]["moneda_actual"] != "USDT"
             ]
@@ -565,7 +605,7 @@ def main():
             for i, c in enumerate(candidatos, 1):
                 s = "+" if c["change_pct"] >= 0 else ""
                 msg += (
-                    f"{i}. {c['symbol'].replace('USDT','')}\n"
+                    f"{i}. {base_coin(c['symbol'])}\n"
                     f"   Score: {c['score']}/12  RSI: {c['rsi']}\n"
                     f"   24h: {s}{c['change_pct']:.1f}%  Vol: x{c['volume_ratio']}\n"
                     f"   Galaxy: {c['galaxy_score']}  Tend: {c['ema_trend']}\n\n"
