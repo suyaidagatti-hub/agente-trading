@@ -26,6 +26,8 @@ BASE_KUCOIN  = "https://api.kucoin.com"
 
 BLACKLIST = {"USDT","USDC","BUSD","DAI","TUSD","USDP","BTC","ETH","WBTC","STETH"}
 
+STABLECOINS = {"USDT","USDC","BUSD","DAI","TUSD","USDP"}
+
 FALLBACK_WATCHLIST = [
     "SOL-USDT","BNB-USDT","AVAX-USDT","DOT-USDT","LINK-USDT",
     "MATIC-USDT","ARB-USDT","OP-USDT","INJ-USDT","SUI-USDT",
@@ -44,14 +46,12 @@ def load_portfolio():
         return json.load(f)
 
 def save_portfolio(p):
-    """Guarda localmente y sube a GitHub automáticamente."""
     p["ultima_actualizacion"] = datetime.utcnow().isoformat()
     with open(PORTFOLIO_F, "w", encoding="utf-8") as f:
         json.dump(p, f, indent=2, ensure_ascii=False)
     sync_portfolio_github(p)
 
 def sync_portfolio_github(p):
-    """Sube el portfolio.json actualizado al repo de GitHub."""
     if not GITHUB_TOKEN or not GITHUB_REPO:
         print("  GitHub sync: variables no configuradas, saltando.")
         return
@@ -63,15 +63,12 @@ def sync_portfolio_github(p):
             "Accept": "application/vnd.github.v3+json",
         }
 
-        # Obtener el SHA actual del archivo (necesario para actualizarlo)
         r = requests.get(api_url, headers=headers, timeout=10)
         sha = r.json().get("sha", "") if r.status_code == 200 else ""
 
-        # Contenido codificado en base64
         contenido = json.dumps(p, indent=2, ensure_ascii=False)
         contenido_b64 = base64.b64encode(contenido.encode()).decode()
 
-        # Commit con el archivo actualizado
         payload = {
             "message": f"Portfolio actualizado — {datetime.utcnow().strftime('%d %b %Y %H:%M UTC')}",
             "content": contenido_b64,
@@ -681,7 +678,25 @@ def main():
 
         linea_key = f"linea_{linea_num}"
         moneda    = moneda.upper()
-        symbol    = to_kucoin(moneda)
+
+        # ── VALIDACIÓN: no permitir stablecoins ni BTC/ETH ──
+        if moneda in STABLECOINS:
+            await update.message.reply_text(
+                f"{moneda} es una stablecoin, no se puede registrar como compra.\n\n"
+                f"Para actualizar el capital usa:\n"
+                f"/capital {linea_num} <monto_usd>"
+            )
+            return
+
+        if moneda in ("BTC", "ETH"):
+            await update.message.reply_text(
+                f"{moneda} no está permitido en este sistema.\n"
+                f"El agente opera solo con altcoins trending.\n\n"
+                f"Usa /trending para ver las mejores opciones ahora."
+            )
+            return
+
+        symbol = to_kucoin(moneda)
 
         p = load_portfolio()
         l = p["lineas"][linea_key]
@@ -711,7 +726,7 @@ def main():
             "fecha":          datetime.utcnow().isoformat(),
         })
 
-        save_portfolio(p)  # guarda local + sync GitHub
+        save_portfolio(p)
 
         sl  = round(precio * 0.92, 4)
         tp1 = round(precio * 1.25, 4)
@@ -782,7 +797,7 @@ def main():
         l["fecha_entrada"]  = None
         l["capital_usd"]    = nuevo_capital
 
-        save_portfolio(p)  # guarda local + sync GitHub
+        save_portfolio(p)
 
         emoji = "GANANCIA" if pl_pct >= 0 else "PERDIDA"
         await update.message.reply_text(
@@ -821,7 +836,7 @@ def main():
         linea_key = f"linea_{linea_num}"
         p = load_portfolio()
         p["lineas"][linea_key]["capital_usd"] = monto
-        save_portfolio(p)  # guarda local + sync GitHub
+        save_portfolio(p)
 
         await update.message.reply_text(
             f"Capital actualizado\n\n"
