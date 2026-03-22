@@ -11,39 +11,31 @@ env:
 jobs:
   scan:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout repositorio
-        uses: actions/checkout@v4
-
-      - name: Configurar Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
       - name: Instalar dependencias
         run: pip install requests anthropic numpy python-dotenv "python-telegram-bot==21.5"
 
-      - name: Verificar variables de entorno
+      - name: Verificar secrets
         run: |
-          python -c "
-          import os
-          keys = ['ANTHROPIC_API_KEY','TELEGRAM_BOT_TOKEN','TELEGRAM_CHAT_ID','LUNARCRUSH_API_KEY']
-          for k in keys:
-              val = os.environ.get(k, '')
-              status = 'OK' if val else 'FALTA'
-              print(f'{k}: {status} (len={len(val)})')
-          "
+          echo "ANTHROPIC len: ${#ANTHROPIC_API_KEY}"
+          echo "TELEGRAM_BOT len: ${#TELEGRAM_BOT_TOKEN}"
+          echo "CHAT_ID len: ${#TELEGRAM_CHAT_ID}"
+          echo "LUNAR len: ${#LUNARCRUSH_API_KEY}"
         env:
-          ANTHROPIC_API_KEY:   ${{ secrets.ANTHROPIC_API_KEY }}
-          TELEGRAM_BOT_TOKEN:  ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID:    ${{ secrets.TELEGRAM_CHAT_ID }}
-          LUNARCRUSH_API_KEY:  ${{ secrets.LUNARCRUSH_API_KEY }}
+          ANTHROPIC_API_KEY:  ${{ secrets.ANTHROPIC_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
+          LUNARCRUSH_API_KEY: ${{ secrets.LUNARCRUSH_API_KEY }}
 
       - name: Correr scanner
         run: python scanner.py
         env:
-          ANTHROPIC_API_KEY:   ${{ secrets.ANTHROPIC_API_KEY }}
-          TELEGRAM_BOT_TOKEN:  ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID:    ${{ secrets.TELEGRAM_CHAT_ID }}
-          LUNARCRUSH_API_KEY:  ${{ secrets.LUNARCRUSH_API_KEY }}
+          ANTHROPIC_API_KEY:  ${{ secrets.ANTHROPIC_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
+          LUNARCRUSH_API_KEY: ${{ secrets.LUNARCRUSH_API_KEY }}
