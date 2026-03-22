@@ -1,4 +1,4 @@
-import os, json, requests
+import os, json, requests, time
 from datetime import datetime
 from dotenv import load_dotenv
 import numpy as np
@@ -55,7 +55,6 @@ def get_trending_coins(top_n=15):
     symbols = []
     coingecko_ok = False
 
-    # Fuente 1: trending por búsquedas
     try:
         r = requests.get(
             "https://api.coingecko.com/api/v3/search/trending",
@@ -71,7 +70,6 @@ def get_trending_coins(top_n=15):
     except Exception as e:
         print(f"  CoinGecko trending no disponible: {e}")
 
-    # Fuente 2: top gainers 24h
     if coingecko_ok:
         try:
             r = requests.get(
@@ -100,7 +98,7 @@ def get_trending_coins(top_n=15):
             seen.add(s)
             unique.append(s)
 
-    # Verificar disponibilidad en Binance
+    # Verificar en Binance
     validos = []
     for sym in unique[:top_n + 10]:
         pair = sym + "USDT"
@@ -117,7 +115,7 @@ def get_trending_coins(top_n=15):
         except:
             continue
 
-    # Si ninguna coin de CoinGecko existe en Binance, usar watchlist de respaldo
+    # Fallback si ninguna coin pasó la validación de Binance
     if not validos:
         print("  Usando watchlist de respaldo...")
         validos = list(FALLBACK_WATCHLIST[:top_n])
@@ -294,8 +292,10 @@ def escanear_candidatos(excluir=[]):
         if base in excluir:
             continue
         try:
+            time.sleep(0.3)  # evitar rate limit de Binance
             data = full_market_data(symbol)
             if "error" in data:
+                print(f"    Error {symbol}: {data['error']}")
                 continue
             t   = data["technical"]
             lc  = data["lunarcrush"]
@@ -320,6 +320,7 @@ def escanear_candidatos(excluir=[]):
                 "volume_ratio": t["volume_ratio"],
                 "ema_trend":    "alcista" if t["ema_20"] > t["ema_50"] else "bajista",
             })
+            print(f"    OK {symbol}: score={score}, RSI={t['rsi_14']}")
         except Exception as e:
             print(f"    Skip {symbol}: {e}")
 
@@ -357,6 +358,7 @@ CUÁNDO COMPRAR:
 - RSI entre 38-62 + EMA 20 sobre EMA 50
 - Volume ratio > 1.2 + Fear & Greed entre 20-68
 - Nunca las 2 líneas en la misma moneda
+- Si no hay candidatos con score > 4, recomendar ESPERAR en USDT
 
 NIVELES:
 - Stop loss: -8% del precio de entrada
@@ -366,7 +368,7 @@ NIVELES:
 Respondé SOLO JSON sin texto extra:
 {
   "linea_1": {
-    "accion": "MANTENER|VENDER|COMPRAR|ROTAR",
+    "accion": "MANTENER|VENDER|COMPRAR|ROTAR|ESPERAR",
     "moneda_destino": "par USDT o null",
     "urgencia": "ALTA|MEDIA|BAJA",
     "razonamiento": "max 200 chars",
@@ -376,7 +378,7 @@ Respondé SOLO JSON sin texto extra:
     "confianza": 0
   },
   "linea_2": {
-    "accion": "MANTENER|VENDER|COMPRAR|ROTAR",
+    "accion": "MANTENER|VENDER|COMPRAR|ROTAR|ESPERAR",
     "moneda_destino": "par USDT o null",
     "urgencia": "ALTA|MEDIA|BAJA",
     "razonamiento": "max 200 chars",
@@ -461,8 +463,11 @@ def formato_estado(portfolio, analisis, candidatos=None):
         l = lineas[key]
         a = analisis.get(key, {})
         accion_icon = {
-            "MANTENER": "[ = ]", "VENDER": "[ VENDER ]",
-            "COMPRAR":  "[ COMPRAR ]", "ROTAR": "[ ROTAR ]",
+            "MANTENER": "[ = ]",
+            "VENDER":   "[ VENDER ]",
+            "COMPRAR":  "[ COMPRAR ]",
+            "ROTAR":    "[ ROTAR ]",
+            "ESPERAR":  "[ ESPERAR ]",
         }.get(a.get("accion", ""), "[-]")
 
         texto = (
@@ -553,6 +558,9 @@ def main():
         await update.message.reply_text("Buscando trending coins...")
         try:
             candidatos = escanear_candidatos()
+            if not candidatos:
+                await update.message.reply_text("Sin candidatos con señales claras ahora. Mercado en pausa.")
+                return
             msg = "TOP TRENDING AHORA\n\n"
             for i, c in enumerate(candidatos, 1):
                 s = "+" if c["change_pct"] >= 0 else ""
