@@ -189,7 +189,9 @@ def get_coin_info(coin: str) -> str:
         f"2. Por qué puede subir (tesis alcista)\n"
         f"3. Riesgos principales\n"
         f"4. Si es más para trading de corto plazo o holding de largo plazo\n\n"
-        f"Sé directo y útil, sin jerga innecesaria."
+        f"Sé directo y útil, sin jerga innecesaria.\n"
+        f"IMPORTANTE: respondé en texto plano, sin markdown, sin #, sin **, sin guiones de lista. "
+        f"Usá números (1. 2. 3.) y saltos de línea simples."
     )
 
     msg = get_anthropic().messages.create(
