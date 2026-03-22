@@ -37,10 +37,10 @@
     "linea_2": {
       "nombre": "Línea 2",
       "capital_inicial_ars": 10000,
-      "capital_usd": 10.0,
-      "moneda_actual": "LYN-USDT",
-      "precio_entrada": 0.087,
-      "fecha_entrada": "2026-03-22",
+      "capital_usd": 11.35,
+      "moneda_actual": "USDT",
+      "precio_entrada": 0,
+      "fecha_entrada": null,
       "historial": [
         {
           "accion": "compra",
@@ -48,9 +48,19 @@
           "precio_entrada": 0.087,
           "capital_usd": 10.0,
           "fecha": "2026-03-22T17:38:49.051750"
+        },
+        {
+          "accion": "venta",
+          "moneda": "LYN-USDT",
+          "precio_entrada": 0.087,
+          "precio_salida": 0.0987,
+          "pl_pct": 13.45,
+          "capital_antes": 10.0,
+          "capital_despues": 11.35,
+          "fecha": "2026-03-22T18:48:11.504967"
         }
       ]
     }
   },
-  "ultima_actualizacion": "2026-03-22T17:38:49.051862"
+  "ultima_actualizacion": "2026-03-22T18:48:11.504988"
 }
