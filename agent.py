@@ -24,8 +24,7 @@ GITHUB_REPO  = os.environ.get("GITHUB_REPO", "")
 PORTFOLIO_F  = "portfolio.json"
 BASE_KUCOIN  = "https://api.kucoin.com"
 
-BLACKLIST = {"USDT","USDC","BUSD","DAI","TUSD","USDP","BTC","ETH","WBTC","STETH"}
-
+BLACKLIST   = {"USDT","USDC","BUSD","DAI","TUSD","USDP","BTC","ETH","WBTC","STETH"}
 STABLECOINS = {"USDT","USDC","BUSD","DAI","TUSD","USDP"}
 
 FALLBACK_WATCHLIST = [
@@ -55,18 +54,16 @@ def sync_portfolio_github(p):
     if not GITHUB_TOKEN or not GITHUB_REPO:
         print("  GitHub sync: variables no configuradas, saltando.")
         return
-
     try:
         api_url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{PORTFOLIO_F}"
         headers = {
             "Authorization": f"token {GITHUB_TOKEN}",
             "Accept": "application/vnd.github.v3+json",
         }
-
         r = requests.get(api_url, headers=headers, timeout=10)
         sha = r.json().get("sha", "") if r.status_code == 200 else ""
 
-        contenido = json.dumps(p, indent=2, ensure_ascii=False)
+        contenido     = json.dumps(p, indent=2, ensure_ascii=False)
         contenido_b64 = base64.b64encode(contenido.encode()).decode()
 
         payload = {
@@ -78,10 +75,9 @@ def sync_portfolio_github(p):
 
         r = requests.put(api_url, headers=headers, json=payload, timeout=10)
         if r.status_code in (200, 201):
-            print("  GitHub sync: portfolio actualizado correctamente.")
+            print("  GitHub sync: OK")
         else:
             print(f"  GitHub sync error: {r.status_code} — {r.json().get('message','')}")
-
     except Exception as e:
         print(f"  GitHub sync exception: {e}")
 
@@ -200,6 +196,11 @@ def get_klines(symbol, interval="4hour", limit=100):
     return candles
 
 def get_ticker(symbol):
+    """
+    FIX: KuCoin /market/stats devuelve 'changeRate' como variación 24h real
+    (ej: 0.05 = +5%). El campo 'open' es el precio de apertura del día UTC,
+    no hace 24 horas exactas, por eso daba 0.0% cerca de medianoche.
+    """
     kc_symbol = to_kucoin(symbol)
     r = requests.get(
         f"{BASE_KUCOIN}/api/v1/market/stats",
@@ -208,9 +209,9 @@ def get_ticker(symbol):
     )
     r.raise_for_status()
     d = r.json().get("data", {})
-    last  = float(d.get("last", 0) or 0)
-    open_ = float(d.get("open", last) or last)
-    change_pct = round((last - open_) / open_ * 100, 2) if open_ > 0 else 0
+    last        = float(d.get("last", 0) or 0)
+    change_rate = float(d.get("changeRate", 0) or 0)
+    change_pct  = round(change_rate * 100, 2)
     return {
         "change_pct": change_pct,
         "volume_24h": float(d.get("volValue", 0) or 0),
@@ -224,22 +225,52 @@ def get_price(symbol):
         return 0
 
 def get_lunarcrush(symbol):
+    """
+    FIX: LunarCrush v4 cambió el endpoint. Ahora usamos /coins/list/v1
+    con filtro por símbolo para obtener el galaxy_score correctamente.
+    Si falla, intentamos el endpoint alternativo /coins/{symbol}/v1.
+    """
     try:
         coin = base_coin(symbol).lower()
         key  = os.environ.get("LUNARCRUSH_API_KEY", "")
+        if not key:
+            return {"galaxy_score": 0, "sentiment": 0, "social_volume": 0}
+
+        # Intento 1: endpoint de lista con filtro (más estable)
+        r = requests.get(
+            "https://lunarcrush.com/api4/public/coins/list/v1",
+            params={"filter": coin},
+            headers={"Authorization": f"Bearer {key}"},
+            timeout=10
+        )
+        if r.status_code == 200:
+            data = r.json().get("data", [])
+            for item in data:
+                if item.get("symbol", "").lower() == coin:
+                    return {
+                        "galaxy_score":  item.get("galaxy_score", 0) or 0,
+                        "sentiment":     item.get("sentiment", 0) or 0,
+                        "social_volume": item.get("social_volume", 0) or 0,
+                    }
+
+        # Intento 2: endpoint individual (fallback)
         r = requests.get(
             f"https://lunarcrush.com/api4/public/coins/{coin}/v1",
             headers={"Authorization": f"Bearer {key}"},
             timeout=10
         )
-        d = r.json().get("data", {})
-        return {
-            "galaxy_score":  d.get("galaxy_score", 0),
-            "sentiment":     d.get("sentiment", 0),
-            "social_volume": d.get("social_volume", 0),
-        }
-    except:
-        return {"galaxy_score": 0, "sentiment": 0, "social_volume": 0}
+        if r.status_code == 200:
+            d = r.json().get("data", {})
+            return {
+                "galaxy_score":  d.get("galaxy_score", 0) or 0,
+                "sentiment":     d.get("sentiment", 0) or 0,
+                "social_volume": d.get("social_volume", 0) or 0,
+            }
+
+    except Exception as e:
+        print(f"    LunarCrush error ({symbol}): {e}")
+
+    return {"galaxy_score": 0, "sentiment": 0, "social_volume": 0}
 
 def get_fear_greed():
     try:
@@ -272,9 +303,7 @@ def get_mercado_global():
             params={"symbol": "BTC-USDT"}, timeout=10
         )
         d = r.json().get("data", {})
-        last  = float(d.get("last", 0) or 0)
-        open_ = float(d.get("open", last) or last)
-        change = round((last - open_) / open_ * 100, 2) if open_ > 0 else 0
+        change = round(float(d.get("changeRate", 0) or 0) * 100, 2)
         return {"btc_dominancia": 0, "eth_dominancia": 0, "cambio_mcap_24h": change}
     except:
         return {"btc_dominancia": 0, "cambio_mcap_24h": 0}
@@ -388,7 +417,8 @@ def escanear_candidatos(excluir=[]):
                 "volume_ratio": t["volume_ratio"],
                 "ema_trend":    "alcista" if t["ema_20"] > t["ema_50"] else "bajista",
             })
-            print(f"    OK {symbol}: score={score}, RSI={t['rsi_14']}")
+            print(f"    OK {symbol}: score={score}, RSI={t['rsi_14']}, "
+                  f"24h={tkr['change_pct']:+.1f}%, galaxy={lc['galaxy_score']}")
         except Exception as e:
             print(f"    Skip {symbol}: {e}")
 
@@ -679,7 +709,6 @@ def main():
         linea_key = f"linea_{linea_num}"
         moneda    = moneda.upper()
 
-        # ── VALIDACIÓN: no permitir stablecoins ni BTC/ETH ──
         if moneda in STABLECOINS:
             await update.message.reply_text(
                 f"{moneda} es una stablecoin, no se puede registrar como compra.\n\n"
@@ -697,11 +726,9 @@ def main():
             return
 
         symbol = to_kucoin(moneda)
-
         p = load_portfolio()
         l = p["lineas"][linea_key]
 
-        # Guardar posición anterior en historial si había una abierta
         if l["moneda_actual"] != "USDT" and l["precio_entrada"] > 0:
             precio_actual = get_price(l["moneda_actual"])
             pl = round((precio_actual - l["precio_entrada"]) / l["precio_entrada"] * 100, 2) if precio_actual > 0 else 0
@@ -714,7 +741,6 @@ def main():
                 "fecha":          datetime.utcnow().isoformat(),
             })
 
-        # Registrar nueva compra
         l["moneda_actual"]  = symbol
         l["precio_entrada"] = precio
         l["fecha_entrada"]  = datetime.utcnow().strftime("%Y-%m-%d")
