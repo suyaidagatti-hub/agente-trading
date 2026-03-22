@@ -5,7 +5,6 @@ import numpy as np
 
 load_dotenv()
 
-# Cliente Anthropic inicializado de forma lazy para evitar error en import
 _anthropic_client = None
 
 def get_anthropic():
@@ -25,7 +24,6 @@ BASE_BINANCE = "https://api.binance.com"
 
 BLACKLIST = {"USDT","USDC","BUSD","DAI","TUSD","USDP","BTC","ETH","WBTC","STETH"}
 
-# Watchlist de respaldo si CoinGecko falla (actualizada manualmente)
 FALLBACK_WATCHLIST = [
     "SOLUSDT","BNBUSDT","AVAXUSDT","DOTUSDT","LINKUSDT",
     "MATICUSDT","ARBUSDT","OPUSDT","INJUSDT","SUIUSDT",
@@ -57,7 +55,7 @@ def get_trending_coins(top_n=15):
     symbols = []
     coingecko_ok = False
 
-    # Intentar CoinGecko trending
+    # Fuente 1: trending por búsquedas
     try:
         r = requests.get(
             "https://api.coingecko.com/api/v3/search/trending",
@@ -73,7 +71,7 @@ def get_trending_coins(top_n=15):
     except Exception as e:
         print(f"  CoinGecko trending no disponible: {e}")
 
-    # Intentar CoinGecko gainers
+    # Fuente 2: top gainers 24h
     if coingecko_ok:
         try:
             r = requests.get(
@@ -94,11 +92,6 @@ def get_trending_coins(top_n=15):
                         symbols.append(sym)
         except Exception as e:
             print(f"  CoinGecko gainers no disponible: {e}")
-
-    # Si no hay coins válidos en Binance, usar watchlist de respaldo
-    if not validos:
-        print("  Usando watchlist de respaldo...")
-        symbols = [s.replace("USDT", "") for s in FALLBACK_WATCHLIST]
 
     # Deduplicar
     seen, unique = set(), []
@@ -123,6 +116,11 @@ def get_trending_coins(top_n=15):
                     break
         except:
             continue
+
+    # Si ninguna coin de CoinGecko existe en Binance, usar watchlist de respaldo
+    if not validos:
+        print("  Usando watchlist de respaldo...")
+        validos = list(FALLBACK_WATCHLIST[:top_n])
 
     print(f"  Coins válidos ({len(validos)}): {[v.replace('USDT','') for v in validos]}")
     return validos
@@ -200,7 +198,6 @@ def get_mercado_global():
             }
     except:
         pass
-    # Fallback: obtener desde Binance
     try:
         r = requests.get(
             f"{BASE_BINANCE}/api/v3/ticker/24hr",
@@ -512,7 +509,7 @@ async def send_telegram(text):
 
 
 # ─────────────────────────────────────────────────────────────
-#  COMANDOS DEL BOT (solo se usan cuando corres agent.py local)
+#  COMANDOS DEL BOT
 # ─────────────────────────────────────────────────────────────
 
 def main():
