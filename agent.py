@@ -1,4 +1,4 @@
-import os, json, requests, time
+import os, json, requests, time, base64
 from datetime import datetime
 from dotenv import load_dotenv
 import numpy as np
@@ -19,6 +19,8 @@ def get_anthropic():
 
 BOT_TOKEN    = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 CHAT_ID      = os.environ.get("TELEGRAM_CHAT_ID", "")
+GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
+GITHUB_REPO  = os.environ.get("GITHUB_REPO", "")
 PORTFOLIO_F  = "portfolio.json"
 BASE_KUCOIN  = "https://api.kucoin.com"
 
@@ -34,7 +36,7 @@ _market_cache = {}
 
 
 # ─────────────────────────────────────────────────────────────
-#  PERSISTENCIA
+#  PERSISTENCIA + SYNC A GITHUB
 # ─────────────────────────────────────────────────────────────
 
 def load_portfolio():
@@ -42,9 +44,49 @@ def load_portfolio():
         return json.load(f)
 
 def save_portfolio(p):
+    """Guarda localmente y sube a GitHub automáticamente."""
     p["ultima_actualizacion"] = datetime.utcnow().isoformat()
     with open(PORTFOLIO_F, "w", encoding="utf-8") as f:
         json.dump(p, f, indent=2, ensure_ascii=False)
+    sync_portfolio_github(p)
+
+def sync_portfolio_github(p):
+    """Sube el portfolio.json actualizado al repo de GitHub."""
+    if not GITHUB_TOKEN or not GITHUB_REPO:
+        print("  GitHub sync: variables no configuradas, saltando.")
+        return
+
+    try:
+        api_url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{PORTFOLIO_F}"
+        headers = {
+            "Authorization": f"token {GITHUB_TOKEN}",
+            "Accept": "application/vnd.github.v3+json",
+        }
+
+        # Obtener el SHA actual del archivo (necesario para actualizarlo)
+        r = requests.get(api_url, headers=headers, timeout=10)
+        sha = r.json().get("sha", "") if r.status_code == 200 else ""
+
+        # Contenido codificado en base64
+        contenido = json.dumps(p, indent=2, ensure_ascii=False)
+        contenido_b64 = base64.b64encode(contenido.encode()).decode()
+
+        # Commit con el archivo actualizado
+        payload = {
+            "message": f"Portfolio actualizado — {datetime.utcnow().strftime('%d %b %Y %H:%M UTC')}",
+            "content": contenido_b64,
+        }
+        if sha:
+            payload["sha"] = sha
+
+        r = requests.put(api_url, headers=headers, json=payload, timeout=10)
+        if r.status_code in (200, 201):
+            print("  GitHub sync: portfolio actualizado correctamente.")
+        else:
+            print(f"  GitHub sync error: {r.status_code} — {r.json().get('message','')}")
+
+    except Exception as e:
+        print(f"  GitHub sync exception: {e}")
 
 
 # ─────────────────────────────────────────────────────────────
@@ -179,10 +221,8 @@ def get_ticker(symbol):
     }
 
 def get_price(symbol):
-    """Obtiene solo el precio actual de una moneda."""
     try:
-        tkr = get_ticker(to_kucoin(symbol))
-        return tkr["price"]
+        return get_ticker(to_kucoin(symbol))["price"]
     except:
         return 0
 
@@ -550,21 +590,18 @@ def main():
     from telegram import Update
     from telegram.ext import Application, CommandHandler, ContextTypes
 
-    # ── Estados de conversación para /comprar y /vender ──
-    compra_pendiente = {}
-    venta_pendiente  = {}
-
     async def cmd_ayuda(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             "COMANDOS\n\n"
-            "/estado       — analisis completo + trending\n"
-            "/portfolio    — ver posiciones actuales\n"
-            "/trending     — top monedas del momento\n"
-            "/comprar      — registrar una compra\n"
-            "/vender       — registrar una venta\n"
-            "/capital      — actualizar capital de una linea\n"
-            "/ayuda        — esta ayuda\n\n"
-            "Alertas automaticas cada 6h via GitHub Actions."
+            "/estado          — analisis completo + trending\n"
+            "/portfolio       — ver posiciones actuales\n"
+            "/trending        — top monedas del momento\n"
+            "/comprar 1 SOL 134.50\n"
+            "/vender 1 168.00\n"
+            "/capital 1 8.33  — actualizar capital\n"
+            "/ayuda           — esta ayuda\n\n"
+            "Alertas automaticas cada 6h via GitHub Actions.\n"
+            "Cambios en portfolio se sincronizan a GitHub automaticamente."
         )
 
     async def cmd_estado(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -620,9 +657,6 @@ def main():
         except Exception as e:
             await update.message.reply_text(f"Error: {e}")
 
-    # ── /comprar ──────────────────────────────────────────────
-    # Uso: /comprar 1 SOL 134.50
-    #      linea  moneda  precio_de_compra
     async def cmd_comprar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         args = context.args
         if len(args) != 3:
@@ -630,9 +664,7 @@ def main():
                 "Uso: /comprar <linea> <moneda> <precio>\n\n"
                 "Ejemplos:\n"
                 "  /comprar 1 SOL 134.50\n"
-                "  /comprar 2 TAO 380.00\n\n"
-                "La linea es 1 o 2.\n"
-                "El precio es el que pagaste en tu exchange."
+                "  /comprar 2 TAO 380.00"
             )
             return
 
@@ -654,7 +686,7 @@ def main():
         p = load_portfolio()
         l = p["lineas"][linea_key]
 
-        # Guardar historial de la posición anterior si la había
+        # Guardar posición anterior en historial si había una abierta
         if l["moneda_actual"] != "USDT" and l["precio_entrada"] > 0:
             precio_actual = get_price(l["moneda_actual"])
             pl = round((precio_actual - l["precio_entrada"]) / l["precio_entrada"] * 100, 2) if precio_actual > 0 else 0
@@ -667,7 +699,7 @@ def main():
                 "fecha":          datetime.utcnow().isoformat(),
             })
 
-        # Registrar la nueva compra
+        # Registrar nueva compra
         l["moneda_actual"]  = symbol
         l["precio_entrada"] = precio
         l["fecha_entrada"]  = datetime.utcnow().strftime("%Y-%m-%d")
@@ -679,7 +711,7 @@ def main():
             "fecha":          datetime.utcnow().isoformat(),
         })
 
-        save_portfolio(p)
+        save_portfolio(p)  # guarda local + sync GitHub
 
         sl  = round(precio * 0.92, 4)
         tp1 = round(precio * 1.25, 4)
@@ -693,12 +725,9 @@ def main():
             f"Stop Loss:      ${sl}  (-8%)\n"
             f"Take Profit 1:  ${tp1}  (+25%)\n"
             f"Take Profit 2:  ${tp2}  (+40%)\n\n"
-            f"Pone una alerta en tu exchange para el SL y los TP."
+            f"Portfolio sincronizado con GitHub."
         )
 
-    # ── /vender ───────────────────────────────────────────────
-    # Uso: /vender 1 134.50
-    #      linea  precio_de_venta
     async def cmd_vender(update: Update, context: ContextTypes.DEFAULT_TYPE):
         args = context.args
         if len(args) != 2:
@@ -706,8 +735,7 @@ def main():
                 "Uso: /vender <linea> <precio>\n\n"
                 "Ejemplos:\n"
                 "  /vender 1 168.00\n"
-                "  /vender 2 420.50\n\n"
-                "El precio es el que recibiste al vender."
+                "  /vender 2 420.50"
             )
             return
 
@@ -727,7 +755,7 @@ def main():
         l = p["lineas"][linea_key]
 
         if l["moneda_actual"] == "USDT":
-            await update.message.reply_text(f"La linea {linea_num} ya esta en USDT, no hay posicion abierta.")
+            await update.message.reply_text(f"La linea {linea_num} ya esta en USDT.")
             return
 
         precio_entrada = l["precio_entrada"]
@@ -738,25 +766,23 @@ def main():
         nuevo_capital = round(capital * (1 + pl_pct / 100), 2)
         signo = "+" if pl_pct >= 0 else ""
 
-        # Guardar en historial
         l["historial"].append({
-            "accion":         "venta",
-            "moneda":         moneda,
-            "precio_entrada": precio_entrada,
-            "precio_salida":  precio_venta,
-            "pl_pct":         pl_pct,
-            "capital_antes":  capital,
+            "accion":          "venta",
+            "moneda":          moneda,
+            "precio_entrada":  precio_entrada,
+            "precio_salida":   precio_venta,
+            "pl_pct":          pl_pct,
+            "capital_antes":   capital,
             "capital_despues": nuevo_capital,
-            "fecha":          datetime.utcnow().isoformat(),
+            "fecha":           datetime.utcnow().isoformat(),
         })
 
-        # Resetear la línea a USDT con capital actualizado
         l["moneda_actual"]  = "USDT"
         l["precio_entrada"] = 0
         l["fecha_entrada"]  = None
         l["capital_usd"]    = nuevo_capital
 
-        save_portfolio(p)
+        save_portfolio(p)  # guarda local + sync GitHub
 
         emoji = "GANANCIA" if pl_pct >= 0 else "PERDIDA"
         await update.message.reply_text(
@@ -766,12 +792,10 @@ def main():
             f"Resultado: {signo}{pl_pct}%\n\n"
             f"Capital anterior: ${capital:.2f}\n"
             f"Capital actual:   ${nuevo_capital:.2f}\n\n"
-            f"La linea quedo en USDT. Manda /trending para ver proximas oportunidades."
+            f"Linea en USDT. Manda /trending para ver proximas oportunidades.\n"
+            f"Portfolio sincronizado con GitHub."
         )
 
-    # ── /capital ──────────────────────────────────────────────
-    # Uso: /capital 1 8.33
-    # Para cargar o actualizar el capital de una línea
     async def cmd_capital(update: Update, context: ContextTypes.DEFAULT_TYPE):
         args = context.args
         if len(args) != 2:
@@ -779,8 +803,7 @@ def main():
                 "Uso: /capital <linea> <monto_usd>\n\n"
                 "Ejemplos:\n"
                 "  /capital 1 8.33\n"
-                "  /capital 2 8.33\n\n"
-                "Converte tus pesos al tipo de cambio blue antes de cargar."
+                "  /capital 2 8.33"
             )
             return
 
@@ -798,12 +821,12 @@ def main():
         linea_key = f"linea_{linea_num}"
         p = load_portfolio()
         p["lineas"][linea_key]["capital_usd"] = monto
-        save_portfolio(p)
+        save_portfolio(p)  # guarda local + sync GitHub
 
         await update.message.reply_text(
             f"Capital actualizado\n\n"
-            f"Linea {linea_num}: ${monto:.2f} USD\n\n"
-            f"Manda /portfolio para ver el estado completo."
+            f"Linea {linea_num}: ${monto:.2f} USD\n"
+            f"Portfolio sincronizado con GitHub."
         )
 
     app = Application.builder().token(BOT_TOKEN).build()
