@@ -1,0 +1,26 @@
+{
+  "lineas": {
+    "linea_1": {
+      "nombre": "Línea 1",
+      "capital_inicial_ars": 10000,
+      "capital_usd": 0,
+      "moneda_actual": "USDT",
+      "cantidad": 0,
+      "precio_entrada": 0,
+      "fecha_entrada": null,
+      "historial": []
+    },
+    "linea_2": {
+      "nombre": "Línea 2",
+      "capital_inicial_ars": 10000,
+      "capital_usd": 0,
+      "moneda_actual": "USDT",
+      "cantidad": 0,
+      "precio_entrada": 0,
+      "fecha_entrada": null,
+      "historial": []
+    }
+  },
+  "dolar_blue": 1450,
+  "ultima_actualizacion": null
+}
