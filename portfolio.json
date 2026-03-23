@@ -4,9 +4,9 @@
       "nombre": "Línea 1",
       "capital_inicial_ars": 10000,
       "capital_usd": 10.72,
-      "moneda_actual": "USDT",
-      "precio_entrada": 0,
-      "fecha_entrada": null,
+      "moneda_actual": "PENGU-USDT",
+      "precio_entrada": 0.007,
+      "fecha_entrada": "2026-03-23",
       "historial": [
         {
           "accion": "compra",
@@ -41,6 +41,13 @@
           "capital_antes": 9.89,
           "capital_despues": 10.72,
           "fecha": "2026-03-23T23:52:32.653951"
+        },
+        {
+          "accion": "compra",
+          "moneda": "PENGU-USDT",
+          "precio_entrada": 0.007,
+          "capital_usd": 10.72,
+          "fecha": "2026-03-23T23:55:21.710888"
         }
       ]
     },
@@ -79,5 +86,5 @@
       ]
     }
   },
-  "ultima_actualizacion": "2026-03-23T23:52:32.653970"
+  "ultima_actualizacion": "2026-03-23T23:55:21.710902"
 }
