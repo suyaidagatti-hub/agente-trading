@@ -55,9 +55,9 @@
       "nombre": "Línea 2",
       "capital_inicial_ars": 10000,
       "capital_usd": 8.97,
-      "moneda_actual": "USDT",
-      "precio_entrada": 0,
-      "fecha_entrada": null,
+      "moneda_actual": "ZEC-USDT",
+      "precio_entrada": 229.3,
+      "fecha_entrada": "2026-03-24",
       "historial": [
         {
           "accion": "compra",
@@ -109,9 +109,16 @@
           "capital_antes": 8.9,
           "capital_despues": 8.97,
           "fecha": "2026-03-24T00:43:53.525259"
+        },
+        {
+          "accion": "compra",
+          "moneda": "ZEC-USDT",
+          "precio_entrada": 229.3,
+          "capital_usd": 8.97,
+          "fecha": "2026-03-24T00:47:06.930593"
         }
       ]
     }
   },
-  "ultima_actualizacion": "2026-03-24T00:43:53.525280"
+  "ultima_actualizacion": "2026-03-24T00:47:06.930618"
 }
