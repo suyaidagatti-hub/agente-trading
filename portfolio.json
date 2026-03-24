@@ -3,10 +3,10 @@
     "linea_1": {
       "nombre": "Línea 1",
       "capital_inicial_ars": 10000,
-      "capital_usd": 10.72,
-      "moneda_actual": "PENGU-USDT",
-      "precio_entrada": 0.007,
-      "fecha_entrada": "2026-03-23",
+      "capital_usd": 10.64,
+      "moneda_actual": "USDT",
+      "precio_entrada": 0,
+      "fecha_entrada": null,
       "historial": [
         {
           "accion": "compra",
@@ -48,6 +48,16 @@
           "precio_entrada": 0.007,
           "capital_usd": 10.72,
           "fecha": "2026-03-23T23:55:21.710888"
+        },
+        {
+          "accion": "venta",
+          "moneda": "PENGU-USDT",
+          "precio_entrada": 0.007,
+          "precio_salida": 0.00695,
+          "pl_pct": -0.71,
+          "capital_antes": 10.72,
+          "capital_despues": 10.64,
+          "fecha": "2026-03-24T15:57:11.058782"
         }
       ]
     },
@@ -120,5 +130,5 @@
       ]
     }
   },
-  "ultima_actualizacion": "2026-03-24T00:47:06.930618"
+  "ultima_actualizacion": "2026-03-24T15:57:11.059491"
 }
