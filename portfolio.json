@@ -82,9 +82,9 @@
       "nombre": "Línea 2",
       "capital_inicial_ars": 10000,
       "capital_usd": 9.27,
-      "moneda_actual": "USDT",
-      "precio_entrada": 0,
-      "fecha_entrada": null,
+      "moneda_actual": "XML-USDT",
+      "precio_entrada": 0.1786,
+      "fecha_entrada": "2026-03-25",
       "historial": [
         {
           "accion": "compra",
@@ -153,9 +153,16 @@
           "capital_antes": 8.97,
           "capital_despues": 9.27,
           "fecha": "2026-03-25T01:29:47.530527"
+        },
+        {
+          "accion": "compra",
+          "moneda": "XML-USDT",
+          "precio_entrada": 0.1786,
+          "capital_usd": 9.27,
+          "fecha": "2026-03-25T01:37:14.812893"
         }
       ]
     }
   },
-  "ultima_actualizacion": "2026-03-25T01:29:47.530536"
+  "ultima_actualizacion": "2026-03-25T01:37:14.812919"
 }
