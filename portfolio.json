@@ -4,9 +4,9 @@
       "nombre": "Línea 1",
       "capital_inicial_ars": 10000,
       "capital_usd": 13.06,
-      "moneda_actual": "USDT",
-      "precio_entrada": 0,
-      "fecha_entrada": null,
+      "moneda_actual": "TAO-USDT",
+      "precio_entrada": 362.1,
+      "fecha_entrada": "2026-03-25",
       "historial": [
         {
           "accion": "compra",
@@ -92,6 +92,13 @@
           "capital_antes": 11.52,
           "capital_despues": 13.06,
           "fecha": "2026-03-25T15:53:03.979949"
+        },
+        {
+          "accion": "compra",
+          "moneda": "TAO-USDT",
+          "precio_entrada": 362.1,
+          "capital_usd": 13.06,
+          "fecha": "2026-03-25T15:54:57.448858"
         }
       ]
     },
@@ -181,5 +188,5 @@
       ]
     }
   },
-  "ultima_actualizacion": "2026-03-25T15:53:03.980013"
+  "ultima_actualizacion": "2026-03-25T15:54:57.448877"
 }
