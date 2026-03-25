@@ -4,9 +4,9 @@
       "nombre": "Línea 1",
       "capital_inicial_ars": 10000,
       "capital_usd": 12.62,
-      "moneda_actual": "USDT",
-      "precio_entrada": 0,
-      "fecha_entrada": null,
+      "moneda_actual": "FET-USDT",
+      "precio_entrada": 0.2607,
+      "fecha_entrada": "2026-03-25",
       "historial": [
         {
           "accion": "compra",
@@ -109,6 +109,13 @@
           "capital_antes": 13.06,
           "capital_despues": 12.62,
           "fecha": "2026-03-25T23:31:49.315298"
+        },
+        {
+          "accion": "compra",
+          "moneda": "FET-USDT",
+          "precio_entrada": 0.2607,
+          "capital_usd": 12.62,
+          "fecha": "2026-03-25T23:35:09.052883"
         }
       ]
     },
@@ -198,5 +205,5 @@
       ]
     }
   },
-  "ultima_actualizacion": "2026-03-25T23:31:49.315327"
+  "ultima_actualizacion": "2026-03-25T23:35:09.052905"
 }
