@@ -3,10 +3,10 @@
     "linea_1": {
       "nombre": "Línea 1",
       "capital_inicial_ars": 10000,
-      "capital_usd": 11.13,
-      "moneda_actual": "DOGE-USDT",
-      "precio_entrada": 0.09303,
-      "fecha_entrada": "2026-03-28",
+      "capital_usd": 110.29,
+      "moneda_actual": "USDT",
+      "precio_entrada": 0,
+      "fecha_entrada": null,
       "historial": [
         {
           "accion": "compra",
@@ -133,6 +133,16 @@
           "precio_entrada": 0.09303,
           "capital_usd": 11.13,
           "fecha": "2026-03-28T14:14:28.446062"
+        },
+        {
+          "accion": "venta",
+          "moneda": "DOGE-USDT",
+          "precio_entrada": 0.09303,
+          "precio_salida": 0.9219,
+          "pl_pct": 890.97,
+          "capital_antes": 11.13,
+          "capital_despues": 110.29,
+          "fecha": "2026-03-28T20:30:13.020107"
         }
       ]
     },
@@ -232,5 +242,5 @@
       ]
     }
   },
-  "ultima_actualizacion": "2026-03-28T14:14:28.446078"
+  "ultima_actualizacion": "2026-03-28T20:30:13.020178"
 }
