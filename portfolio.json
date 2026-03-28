@@ -4,9 +4,9 @@
       "nombre": "Línea 1",
       "capital_inicial_ars": 10000,
       "capital_usd": 11.13,
-      "moneda_actual": "USDT",
-      "precio_entrada": 0,
-      "fecha_entrada": null,
+      "moneda_actual": "DOGE-USDT",
+      "precio_entrada": 0.09303,
+      "fecha_entrada": "2026-03-28",
       "historial": [
         {
           "accion": "compra",
@@ -126,6 +126,13 @@
           "capital_antes": 12.62,
           "capital_despues": 11.13,
           "fecha": "2026-03-26T09:59:38.947683"
+        },
+        {
+          "accion": "compra",
+          "moneda": "DOGE-USDT",
+          "precio_entrada": 0.09303,
+          "capital_usd": 11.13,
+          "fecha": "2026-03-28T14:14:28.446062"
         }
       ]
     },
@@ -225,5 +232,5 @@
       ]
     }
   },
-  "ultima_actualizacion": "2026-03-28T14:09:17.174482"
+  "ultima_actualizacion": "2026-03-28T14:14:28.446078"
 }
