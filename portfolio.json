@@ -4,9 +4,9 @@
       "nombre": "Línea 1",
       "capital_inicial_ars": 10000,
       "capital_usd": 10.0,
-      "moneda_actual": "USDT",
-      "precio_entrada": 0,
-      "fecha_entrada": null,
+      "moneda_actual": "SIREN-USDT",
+      "precio_entrada": 1.882,
+      "fecha_entrada": "2026-03-28",
       "historial": [
         {
           "accion": "compra",
@@ -143,6 +143,13 @@
           "capital_antes": 11.13,
           "capital_despues": 110.29,
           "fecha": "2026-03-28T20:30:13.020107"
+        },
+        {
+          "accion": "compra",
+          "moneda": "SIREN-USDT",
+          "precio_entrada": 1.882,
+          "capital_usd": 10.0,
+          "fecha": "2026-03-28T20:31:25.824764"
         }
       ]
     },
@@ -242,5 +249,5 @@
       ]
     }
   },
-  "ultima_actualizacion": "2026-03-28T20:30:49.937428"
+  "ultima_actualizacion": "2026-03-28T20:31:25.824777"
 }
