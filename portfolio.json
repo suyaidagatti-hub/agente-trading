@@ -132,10 +132,10 @@
     "linea_2": {
       "nombre": "Línea 2",
       "capital_inicial_ars": 10000,
-      "capital_usd": 9.27,
-      "moneda_actual": "XML-USDT",
-      "precio_entrada": 0.1786,
-      "fecha_entrada": "2026-03-25",
+      "capital_usd": 8.76,
+      "moneda_actual": "USDT",
+      "precio_entrada": 0,
+      "fecha_entrada": null,
       "historial": [
         {
           "accion": "compra",
@@ -211,9 +211,19 @@
           "precio_entrada": 0.1786,
           "capital_usd": 9.27,
           "fecha": "2026-03-25T01:37:14.812893"
+        },
+        {
+          "accion": "venta",
+          "moneda": "XML-USDT",
+          "precio_entrada": 0.1786,
+          "precio_salida": 0.1688,
+          "pl_pct": -5.49,
+          "capital_antes": 9.27,
+          "capital_despues": 8.76,
+          "fecha": "2026-03-28T14:09:17.174421"
         }
       ]
     }
   },
-  "ultima_actualizacion": "2026-03-26T09:59:38.947714"
+  "ultima_actualizacion": "2026-03-28T14:09:17.174482"
 }
